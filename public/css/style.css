@@ -817,3 +817,96 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
     grid-template-columns:minmax(0,1fr);
   }
 }
+
+/* Help Center page */
+.help-center-wrapper{
+  max-width:1040px;
+}
+.help-center-hero{
+  background:linear-gradient(120deg,#f5eee5,#f1f5f9);
+  border-radius:24px;
+  padding:2.4rem 2.6rem;
+  display:grid;
+  grid-template-columns:minmax(0,1.35fr) minmax(0,0.9fr);
+  gap:2rem;
+  box-shadow:0 22px 60px rgba(15,23,42,0.12);
+}
+.help-center-hero-text{
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+}
+.help-center-kicker{
+  font-size:0.78rem;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:#8a7b68;
+  margin-bottom:0.35rem;
+}
+.help-center-title{
+  font-size:1.9rem;
+  font-weight:600;
+  margin:0 0 0.45rem 0;
+  color:#111827;
+}
+.help-center-copy{
+  font-size:0.95rem;
+  color:#4b5563;
+  max-width:30rem;
+}
+.help-center-hero-visual{
+  border-radius:18px;
+  background:
+    linear-gradient(145deg,rgba(0,0,0,0.3),rgba(0,0,0,0.65)),
+    url('/images/help-center-hero.jpg') center/cover no-repeat;
+  min-height:220px;
+}
+.help-center-subcopy{
+  font-size:0.9rem;
+  color:#6b7280;
+  margin-bottom:1.75rem;
+}
+.help-center-grid{
+  margin-top:0.25rem;
+}
+.help-card{
+  border-radius:18px;
+  background:#ffffff;
+  border:1px solid #e5e7eb;
+  box-shadow:0 18px 45px rgba(15,23,42,0.08);
+  padding:1.8rem 1.7rem 1.7rem 1.7rem;
+}
+.help-card-body{
+  height:100%;
+}
+.help-card-title{
+  font-size:1.1rem;
+  font-weight:500;
+  margin-bottom:0.4rem;
+}
+.help-card-desc{
+  font-size:0.88rem;
+  color:#6b7280;
+  margin-bottom:1.1rem;
+}
+.help-primary-btn{
+  border-radius:999px;
+  padding:0.55rem 1.7rem;
+  font-size:0.86rem;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+.help-secondary-btn{
+  border-radius:999px;
+  padding:0.55rem 1.7rem;
+  font-size:0.86rem;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+
+@media (max-width:768px){
+  .help-center-hero{
+    grid-template-columns:minmax(0,1fr);
+    padding:2rem 1.6rem;
+  }
+}

@@ -238,21 +238,30 @@
     (function(){
       const search = document.getElementById('searchBox');
       const grid = document.getElementById('productsGrid');
+      if (!search || !grid) return;
+
       const items = Array.from(grid.querySelectorAll('.product-card'));
+
       function doFilter(){
         const q = (search.value || '').toLowerCase().trim();
         items.forEach(function(card){
-          const title = (card.querySelector('.card-title') && card.querySelector('.card-title').textContent) || '';
-          card.closest('.col-6, .col-md-4, .col-lg-3').style.display = title.toLowerCase().includes(q) ? '' : 'none';
+          const titleEl = card.querySelector('.card-title');
+          const title = titleEl ? titleEl.textContent : '';
+          card.style.display = title.toLowerCase().includes(q) ? '' : 'none';
         });
       }
+
       search.addEventListener('input', doFilter);
-      document.getElementById('clearSearch').addEventListener('click', function(){
-        // clear search and category filter (reload clean shopping page)
-        search.value = '';
-        doFilter();
-        window.location.href = '/shopping';
-      });
+
+      const clearBtn = document.getElementById('clearSearch');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function(){
+          search.value = '';
+          items.forEach(function(card){ card.style.display = ''; });
+          // also reset any category filter by navigating back to base shopping
+          window.location.href = '/shopping';
+        });
+      }
     })();
 
     // Note: we intentionally do not intercept add-to-cart forms here so that

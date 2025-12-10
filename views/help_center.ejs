@@ -1,8 +1,16 @@
 <%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Help Center' }) %>
 
-<div class="container mt-4 mb-5">
-  <h2 class="mb-3">Help Center</h2>
-  <p class="text-muted mb-4">Submit requests to change delivery address or ask for a refund.</p>
+<div class="container mt-5 mb-5 help-center-wrapper">
+  <section class="help-center-hero mb-4">
+    <div class="help-center-hero-text">
+      <p class="help-center-kicker">Need a hand?</p>
+      <h1 class="help-center-title">Help Center</h1>
+      <p class="help-center-copy">Update your delivery details or request a refund in just a few steps. Our team reviews every request to keep your GlowAura orders stress free.</p>
+    </div>
+    <div class="help-center-hero-visual" aria-hidden="true"></div>
+  </section>
+
+  <p class="help-center-subcopy">Submit requests to change delivery address or ask for a refund.</p>
 
   <% if (typeof errors !== 'undefined' && errors.length) { %>
     <div class="alert alert-danger">
@@ -23,12 +31,12 @@
     </div>
   <% } %>
 
-  <div class="row g-4">
+  <div class="row g-4 help-center-grid">
     <div class="col-md-6">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <h5 class="card-title">Request delivery address change</h5>
-          <p class="text-muted small">Available only for orders that are packed but not yet shipped.</p>
+      <div class="help-card h-100">
+        <div class="help-card-body">
+          <h2 class="help-card-title">Change delivery address</h2>
+          <p class="help-card-desc">Available only for orders that are packed but not yet shipped.</p>
           <form action="/help-center/address-change" method="POST">
             <div class="mb-3">
               <label class="form-label">Order</label>
@@ -47,17 +55,17 @@
               <label class="form-label">Reason (optional)</label>
               <textarea name="reason" class="form-control" rows="2" placeholder="Tell us why you need to change the address"></textarea>
             </div>
-            <button type="submit" class="btn btn-primary">Submit address change request</button>
+            <button type="submit" class="btn btn-dark help-primary-btn">Submit address change</button>
           </form>
         </div>
       </div>
     </div>
 
     <div class="col-md-6">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <h5 class="card-title">Request a refund / cancel order</h5>
-          <p class="text-muted small">Choose an order to cancel and request a refund.</p>
+      <div class="help-card h-100">
+        <div class="help-card-body">
+          <h2 class="help-card-title">Request a refund / cancel</h2>
+          <p class="help-card-desc">Choose an order to cancel and request a refund.</p>
           <form id="refundForm" action="/help-center/refund" method="POST">
             <div class="mb-3">
               <label class="form-label">Order</label>
@@ -76,7 +84,7 @@
               <input type="checkbox" class="form-check-input" id="confirmCancel" required>
               <label class="form-check-label" for="confirmCancel">I understand this will cancel my order and start a refund process.</label>
             </div>
-            <button type="button" id="refundConfirmBtn" class="btn btn-danger">Request refund</button>
+            <button type="button" id="refundConfirmBtn" class="btn btn-outline-danger help-secondary-btn">Request refund</button>
           </form>
         </div>
       </div>
@@ -96,7 +104,7 @@
         <p>Are you sure you want to cancel this order and request a refund? This action cannot be undone once processed by our team.</p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep my order</button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Keep my order</button>
         <button type="button" id="confirmRefundSubmit" class="btn btn-danger">Yes, cancel and refund</button>
       </div>
     </div>
