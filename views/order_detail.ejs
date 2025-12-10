@@ -1,0 +1,99 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Order Details' }) %>
+
+<div class="container mt-5 mb-5 order-detail-wrapper">
+  <div class="order-detail-card">
+    <header class="order-detail-header">
+      <div>
+        <p class="order-detail-kicker">Order summary</p>
+        <h1 class="order-detail-title">Order #<%= order.id %></h1>
+        <p class="order-detail-meta">Placed on <%= new Date(order.createdAt).toLocaleString() %></p>
+      </div>
+      <div class="order-detail-total-block">
+        <span class="order-detail-total-label">Total</span>
+        <span class="order-detail-total-amount">$<%= Number(order.total || (order.subtotal + order.deliveryCost)).toFixed(2) %></span>
+      </div>
+    </header>
+
+    <section class="order-detail-main">
+      <div class="order-detail-left">
+        <div class="order-detail-info-group">
+          <h2 class="order-detail-section-title">Payment & shipping</h2>
+          <dl class="order-detail-def-list">
+            <div class="order-detail-def-row">
+              <dt>Payment</dt>
+              <dd><%= order.paymentMethod || 'card' %></dd>
+            </div>
+            <div class="order-detail-def-row">
+              <dt>Delivery option</dt>
+              <dd><%= order.deliveryOption || 'normal' %></dd>
+            </div>
+            <div class="order-detail-def-row">
+              <dt>Estimated delivery</dt>
+              <dd><%= new Date(order.estimatedDelivery || new Date().toISOString()).toLocaleString() %></dd>
+            </div>
+            <div class="order-detail-def-row">
+              <dt>Status</dt>
+              <dd>
+                <span class="order-status-pill">
+                  <%= order.deliveryStatus || order.status || 'processing' %>
+                </span>
+              </dd>
+            </div>
+            <% if (order.refundStatus) { %>
+              <div class="order-detail-def-row">
+                <dt>Refund</dt>
+                <dd class="text-danger"><strong><%= order.refundStatus %></strong></dd>
+              </div>
+            <% } %>
+          </dl>
+        </div>
+
+        <% if (order.delivery) { %>
+          <div class="order-detail-info-group">
+            <h2 class="order-detail-section-title">Delivery details</h2>
+            <p class="order-detail-address">
+              <strong><%= order.delivery.fullName %></strong><br>
+              <%= order.delivery.street %><% if (order.delivery.unit) { %>, #<%= order.delivery.unit %><% } %><br>
+              <%= order.delivery.postalCode %><br>
+              <% if (order.delivery.note) { %>
+                <span class="text-muted">Note: <%= order.delivery.note %></span>
+              <% } %>
+            </p>
+          </div>
+        <% } %>
+      </div>
+
+      <div class="order-detail-right">
+        <h2 class="order-detail-section-title">Items</h2>
+        <ul class="order-detail-items-list">
+          <% (order.items || []).forEach(function(item){ %>
+            <li class="order-detail-item-row">
+              <div class="order-detail-item-main">
+                <div class="order-detail-item-name"><%= item.productName %></div>
+                <div class="order-detail-item-meta">Qty <%= item.quantity %> · $<%= Number(item.price).toFixed(2) %> each</div>
+              </div>
+              <div class="order-detail-item-total">$<%= (Number(item.price) * Number(item.quantity)).toFixed(2) %></div>
+            </li>
+          <% }) %>
+        </ul>
+
+        <% if (order.history && order.history.length) { %>
+          <div class="order-detail-history">
+            <h3 class="order-detail-history-title">Timeline</h3>
+            <ul class="order-detail-history-list">
+              <% order.history.forEach(function(h){ %>
+                <li><span class="order-detail-history-status"><%= h.status %></span> · <span class="order-detail-history-time"><%= new Date(h.at).toLocaleString() %></span></li>
+              <% }) %>
+            </ul>
+          </div>
+        <% } %>
+      </div>
+    </section>
+
+    <footer class="order-detail-footer">
+      <a href="/orders" class="btn btn-outline-dark order-detail-back-btn">Back to orders</a>
+    </footer>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

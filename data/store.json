@@ -1,0 +1,192 @@
+{
+  "categories": [
+    {
+      "id": 1,
+      "name": "Cleansers"
+    },
+    {
+      "id": 2,
+      "name": "Serums"
+    },
+    {
+      "id": 3,
+      "name": "Moisturizers"
+    },
+    {
+      "id": 4,
+      "name": "Sun Care"
+    },
+    {
+      "id": 5,
+      "name": "Eye Care"
+    },
+    {
+      "id": 6,
+      "name": "Masks"
+    }
+  ],
+  "products": [
+    {
+      "id": 1,
+      "productName": "Velvet Cloud Cream Cleanser",
+      "quantity": 80,
+      "price": 29,
+      "image": "cleanser_velvet_cloud.png",
+      "category": "Cleansers"
+    },
+    {
+      "id": 2,
+      "productName": "Green Tea Gel Cleanser",
+      "quantity": 100,
+      "price": 24,
+      "image": "cleanser_green_tea.png",
+      "category": "Cleansers"
+    },
+    {
+      "id": 3,
+      "productName": "Radiance Vitamin C Serum 15%",
+      "quantity": 60,
+      "price": 69,
+      "image": "serum_vitc_15.png",
+      "category": "Serums"
+    },
+    {
+      "id": 4,
+      "productName": "Midnight Repair Retinol Serum",
+      "quantity": 45,
+      "price": 79,
+      "image": "serum_retinol_midnight.png",
+      "category": "Serums"
+    },
+    {
+      "id": 5,
+      "productName": "HydraSilk Daily Moisturizer",
+      "quantity": 90,
+      "price": 58,
+      "image": "moist_hydrasilk.png",
+      "category": "Moisturizers"
+    },
+    {
+      "id": 6,
+      "productName": "Ceramide Barrier Cream Rich",
+      "quantity": 40,
+      "price": 72,
+      "image": "moist_ceramide_rich.png",
+      "category": "Moisturizers"
+    },
+    {
+      "id": 7,
+      "productName": "Weightless SPF50 Fluid",
+      "quantity": 120,
+      "price": 45,
+      "image": "suncare_spf50_fluid.png",
+      "category": "Sun Care"
+    },
+    {
+      "id": 8,
+      "productName": "Tinted Mineral SPF40",
+      "quantity": 70,
+      "price": 52,
+      "image": "suncare_tinted_spf40.png",
+      "category": "Sun Care"
+    },
+    {
+      "id": 9,
+      "productName": "Peptide Eye Renewal Cream",
+      "quantity": 55,
+      "price": 68,
+      "image": "eye_peptide_renewal.png",
+      "category": "Eye Care"
+    },
+    {
+      "id": 10,
+      "productName": "24K Gold Illuminating Eye Masks (6 pairs)",
+      "quantity": 35,
+      "price": 54,
+      "image": "eye_gold_masks.png",
+      "category": "Eye Care"
+    },
+    {
+      "id": 11,
+      "productName": "Rose Quartz Overnight Sleeping Mask",
+      "quantity": 50,
+      "price": 64,
+      "image": "mask_rose_quartz.png",
+      "category": "Masks"
+    },
+    {
+      "id": 12,
+      "productName": "Pore-Refining Clay Detox Mask",
+      "quantity": 65,
+      "price": 39,
+      "image": "mask_clay_detox.png",
+      "category": "Masks"
+    }
+  ],
+  "nextProductId": 13,
+  "nextCategoryId": 7,
+  "orders": [
+    {
+      "userId": 5,
+      "items": [
+        {
+          "productId": 4,
+          "productName": "Midnight Repair Retinol Serum",
+          "price": "79.00",
+          "quantity": 3,
+          "image": "serum_retinol_midnight.png"
+        }
+      ],
+      "subtotal": 237,
+      "deliveryOption": "normal",
+      "deliveryCost": 10,
+      "total": 247,
+      "paymentMethod": "card",
+      "delivery": {
+        "fullName": "rtyhjuk",
+        "street": "t45y6",
+        "unit": "rty",
+        "postalCode": "546",
+        "note": "ertyh"
+      },
+      "status": "paid",
+      "paymentDetails": {
+        "method": "card",
+        "holder": "",
+        "last4": "",
+        "cvv": ""
+      },
+      "deliveryStatus": "processing",
+      "id": 1,
+      "createdAt": "2025-12-10T16:35:49.555Z"
+    }
+  ],
+  "nextOrderId": 2,
+  "notifications": [
+    {
+      "id": 1,
+      "userId": null,
+      "role": "admin",
+      "type": "order",
+      "message": "New paid order #1 from n.",
+      "link": "/admin/orders",
+      "createdAt": "2025-12-10T16:35:49.560Z",
+      "read": false
+    },
+    {
+      "id": 2,
+      "userId": 5,
+      "role": "user",
+      "type": "order",
+      "message": "Your order #1 has been placed successfully.",
+      "link": "/orders/1",
+      "createdAt": "2025-12-10T16:35:49.561Z",
+      "read": false
+    }
+  ],
+  "nextNotificationId": 3,
+  "refundRequests": [],
+  "nextRefundId": 1,
+  "addressChangeRequests": [],
+  "nextAddressChangeId": 1
+}

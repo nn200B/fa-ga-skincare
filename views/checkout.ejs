@@ -1,0 +1,101 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Checkout' }) %>
+
+<div class="container mt-4">
+  <h2>Checkout</h2>
+
+  <% var errors = (typeof errors !== 'undefined' && Array.isArray(errors)) ? errors : []; %>
+  <% var success = (typeof success !== 'undefined' && Array.isArray(success)) ? success : []; %>
+
+  <% if (errors.length) { %>
+    <div class="alert alert-danger"><%= errors.join('<br>') %></div>
+  <% } %>
+  <% if (success.length) { %>
+    <div class="alert alert-success"><%= success.join('<br>') %></div>
+  <% } %>
+
+  <h4>Items</h4>
+  <ul class="list-group mb-3">
+    <% (cart || []).forEach(function(item){ %>
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        <div>
+          <strong><%= item.productName %></strong>
+          <div class="text-muted">Qty: <%= item.quantity %> &middot; $<%= Number(item.price || 0).toFixed(2) %></div>
+        </div>
+        <div>
+          $<%= (Number(item.price || 0) * Number(item.quantity || 0)).toFixed(2) %>
+        </div>
+      </li>
+    <% }) %>
+  </ul>
+
+  <h4>Subtotal: $<%= subtotal.toFixed(2) %></h4>
+
+  <% if (delivery) { %>
+    <h5 class="mt-3">Delivery to</h5>
+    <p>
+      <strong><%= delivery.fullName %></strong><br>
+      <%= delivery.street %><% if (delivery.unit) { %>, #<%= delivery.unit %><% } %><br>
+      <%= delivery.postalCode %><br>
+      <% if (delivery.note) { %>
+        <span class="text-muted">Note: <%= delivery.note %></span>
+      <% } %>
+    </p>
+  <% } %>
+
+  <form method="post" action="/checkout">
+    <div class="mb-3">
+      <label class="form-label">Delivery option</label>
+      <select name="deliveryOption" class="form-select">
+        <option value="normal">Normal (3 business days) - $10</option>
+        <option value="one-day">One-day (next business day if before 1pm) - $25</option>
+      </select>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Payment method</label>
+      <select id="paymentMethod" name="paymentMethod" class="form-select">
+        <option value="card">Debit / Credit Card</option>
+        <option value="qr">PayNow QR</option>
+      </select>
+    </div>
+
+    <div id="cardFields">
+      <div class="mb-3">
+        <label class="form-label">Card holder</label>
+        <input name="cardHolder" class="form-control" placeholder="Card holder name" />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Card number</label>
+        <input name="cardNumber" class="form-control" placeholder="1234 5678 9012 3456" />
+      </div>
+      <div class="row">
+        <div class="col-md-6 mb-3">
+          <label class="form-label">Expiry (MM/YY)</label>
+          <input name="expiry" class="form-control" placeholder="08/25" />
+        </div>
+        <div class="col-md-6 mb-3">
+          <label class="form-label">CVV</label>
+          <input name="cvv" class="form-control" placeholder="123" />
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Pay $<%= subtotal.toFixed(2) %> (plus delivery at checkout)</button>
+    <a href="/cart" class="btn btn-secondary ms-2">Back to cart</a>
+  </form>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const pm = document.getElementById('paymentMethod');
+    const cardFields = document.getElementById('cardFields');
+    function toggle() {
+      if (pm.value === 'card') cardFields.style.display = '';
+      else cardFields.style.display = 'none';
+    }
+    pm.addEventListener('change', toggle);
+    toggle();
+  });
+</script>
+
+<%- include('partials/footer') %>

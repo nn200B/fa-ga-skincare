@@ -1,0 +1,74 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Inventory' }) %>
+
+  <div class="container mt-4">
+    <p>Welcome, <%= user.username %> (<%= user.role %>)</p>
+    <% if (typeof user !== 'undefined' && user.role === 'admin') { %>
+      <div class="alert alert-info" role="alert">
+        Admin panel: manage products here. Cart and shopping are disabled for admin accounts. Use the Edit/Delete links or change quantities inline.
+      </div>
+    <% } %>
+    <br>
+    <div class="d-flex justify-content-between align-items-center">
+      <div class="text-center flex-grow-1"><h2>GlowAura Skincare Product Inventory</h2></div>
+      <% if (typeof user !== 'undefined' && user && user.role === 'admin') { %>
+        <div class="ms-3">
+          <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addProductModal">Add New Product</button>
+          <!-- Manage categories removed per request -->
+        </div>
+      <% } %>
+    </div>
+    <br>
+    <table class="table table-hover small text-center">
+      <thead>
+          <tr>
+            <th width="100">Product Name</th>
+            <th width="100">Product Image</th>
+            <th width="50">Quantity</th>
+            <th width="50">Price</th>
+            <th width="50">Edit</th>
+            <th width="50">Delete</th>
+          </tr>
+      </thead>
+      <tbody>
+        <% for(let i=0; i < products.length; i++) { %>
+          <tr>
+            <td><a href="/product/<%= products[i].id %>" ><%= products[i].productName %></a></td>
+            <td><img src = "images/<%= products[i].image %>" width="20%"></td>
+            <td>
+              <div class="d-flex justify-content-center">
+                <div style="max-width:140px;">
+                  <span class="fw-semibold"><%= products[i].quantity %></span>
+                </div>
+              </div>
+            </td>
+            <td>$<%= (Number(products[i].price) || 0).toFixed(2) %></td>
+            <!-- Edit Link -->
+            <td><a href="/updateProduct/<%= products[i].id %>">Edit</a></td>
+            <!-- Delete Link -->
+            <td><a href="/deleteProduct/<%= products[i].id %>" onclick="return confirm('Are you sure you want to delete this product?')">Delete</a></td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+  
+    <!-- Add Product Modal (admin) -->
+    <div class="modal fade" id="addProductModal" tabindex="-1" aria-labelledby="addProductModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="addProductModalLabel">Add New Product</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <%- include('partials/addProductForm', { categories: (typeof categories !== 'undefined' ? categories : []) }) %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container (kept for other features) -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080">
+      <div id="toastContainer"></div>
+    </div>
+  </div>
+  <%- include('partials/footer') %>

@@ -1,0 +1,68 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: product ? product.productName : 'Product' }) %>
+
+        <div class="container mt-5 mb-5 product-detail-wrapper">
+                <% if (product) { const stock = Number(product.quantity) || 0; %>
+                    <div class="product-detail-card">
+                        <div class="product-detail-image-col">
+                            <div class="product-detail-image-wrap">
+                                <img src="/images/<%= product.image %>" alt="<%= product.productName %>" class="product-detail-image">
+                            </div>
+                        </div>
+                        <div class="product-detail-info-col">
+                            <p class="product-detail-kicker">GlowAura Skin • Daily ritual</p>
+                            <h1 class="product-detail-title"><%= product.productName %></h1>
+                            <p class="product-detail-price">$<%= (Number(product.price) || 0).toFixed(2) %></p>
+
+                            <div class="product-detail-meta-row">
+                                <span class="product-detail-stock-pill <%= stock <= 0 ? 'is-out' : '' %>">
+                                    <%= stock <= 0 ? 'Out of stock' : ('In stock · ' + stock + ' left') %>
+                                </span>
+                            </div>
+
+                            <p class="product-detail-copy">
+                                A thoughtfully crafted formula designed to leave your skin feeling calm, hydrated and refined.
+                                Pair it with your favourite cleanser and SPF for an effortless everyday routine.
+                            </p>
+
+                            <% if (user.role === 'user') { %>
+                                <% if (stock > 0) { %>
+                                    <form action="/add-to-cart/<%= product.id %>" method="POST" class="product-detail-add-row">
+                                        <div class="product-detail-qty-group">
+                                            <label class="form-label mb-1">Quantity</label>
+                                            <select name="quantity" class="form-select form-select-sm">
+                                                <% const maxSelectable = Math.min(stock, 5); for (let q = 1; q <= maxSelectable; q++) { %>
+                                                    <option value="<%= q %>"><%= q %></option>
+                                                <% } %>
+                                            </select>
+                                        </div>
+                                        <button type="submit" class="btn btn-dark product-detail-add-btn">Add to cart</button>
+                                    </form>
+                                <% } else { %>
+                                    <p class="mt-3"><span class="badge bg-secondary">Currently unavailable</span></p>
+                                <% } %>
+                            <% } %>
+
+                            <div class="product-detail-note">Free shipping above $80 • Clean, cruelty-free • Dermatologist tested</div>
+
+                            <div class="product-detail-back mt-4">
+                                <% if (user.role === "admin") { %>
+                                    <a href="/inventory" class="product-detail-back-link">Back to inventory</a>
+                                <% } else { %>
+                                    <a href="/shopping" class="product-detail-back-link">Back to shopping</a>
+                                <% } %>
+                            </div>
+                        </div>
+                    </div>
+                <% } else { %>
+                    <p>No product found.</p>
+                    <div class="mt-3">
+                        <% if (user && user.role === "admin") { %>
+                            <a href="/inventory">Back to inventory</a>
+                        <% } else { %>
+                            <a href="/shopping">Back to shopping</a>
+                        <% } %>
+                    </div>
+                <% } %>
+        </div>
+
+<%- include('partials/footer') %>

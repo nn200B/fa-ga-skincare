@@ -1,0 +1,70 @@
+<%- include('partials/header', { title: 'Register' }) %>
+
+<div class="auth-wrapper">
+    <div class="auth-card register-card">
+        <div class="auth-illustration d-none d-md-flex">
+            <div>
+                <h2 class="brand-title">Join GlowAura Society</h2>
+                <p class="brand-subtitle">Create a member profile to unlock curated, luxury skincare.</p>
+                <ul class="auth-highlights">
+                    <li>✔ Tailored rituals for your skin type</li>
+                    <li>✔ Priority access to limited collections</li>
+                    <li>✔ Complimentary samples with every order</li>
+                </ul>
+            </div>
+        </div>
+        <div class="auth-form">
+            <h1 class="auth-heading">Create your GlowAura ID</h1>
+            <p class="auth-text">Fill in your details to begin your skincare journey.</p>
+
+            <% if (messages && messages.length > 0) { %>
+                <div class="alert alert-danger mb-3">
+                    <% messages.forEach(function(message) { %>
+                        <div><%= message %></div>
+                    <% }); %>
+                </div>
+            <% } %>
+
+            <form action="/register" method="POST" class="mt-3">
+                <div class="mb-3">
+                    <label for="username" class="form-label">Username</label>
+                    <input type="text" id="username" name="username" class="form-control form-control-lg" required
+                        value="<%= formData && formData.username ? formData.username : '' %>">
+                </div>
+                <div class="mb-3">
+                    <label for="email" class="form-label">Email address</label>
+                    <input type="email" id="email" name="email" class="form-control form-control-lg" required
+                        value="<%= formData && formData.email ? formData.email : '' %>">
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" id="password" name="password" class="form-control form-control-lg" required>
+                </div>
+                <div class="mb-3">
+                    <label for="address" class="form-label">Address</label>
+                    <input type="text" id="address" name="address" class="form-control form-control-lg" required
+                        value="<%= formData && formData.address ? formData.address : '' %>">
+                </div>
+                <div class="mb-3">
+                    <label for="contact" class="form-label">Contact Number</label>
+                    <input type="text" id="contact" name="contact" class="form-control form-control-lg" required
+                        value="<%= formData && formData.contact ? formData.contact : '' %>">
+                </div>
+                <div class="mb-3">
+                    <label for="role" class="form-label">Role</label>
+                    <select id="role" name="role" class="form-select form-select-lg" required>
+                        <option value="user" <%= formData && formData.role === 'user' ? 'selected' : '' %>>User</option>
+                        <option value="admin" <%= formData && formData.role === 'admin' ? 'selected' : '' %>>Admin</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success w-100 btn-lg">Create account</button>
+            </form>
+
+            <p class="auth-footer-text mt-3">Already have an account?
+                <a href="/login">Sign in instead</a>
+            </p>
+        </div>
+    </div>
+</div>
+
+<%- include('partials/footer') %>

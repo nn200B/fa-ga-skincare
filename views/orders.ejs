@@ -1,0 +1,25 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'My Orders' }) %>
+
+<div class="container mt-4">
+  <h2>My Orders</h2>
+  <% if (!orders || orders.length === 0) { %>
+    <p>You have not placed any orders yet.</p>
+  <% } else { %>
+    <div class="list-group">
+      <% orders.forEach(function(o){ %>
+        <a href="/orders/<%= o.id %>" class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
+          <div>
+            <div><strong>Order #<%= o.id %></strong> - <%= o.paymentMethod || 'card' %></div>
+            <div class="small text-muted">Placed: <%= new Date(o.createdAt).toLocaleString() %></div>
+          </div>
+          <div class="text-end">
+            <div>$<%= Number(o.total || (o.subtotal + o.deliveryCost)).toFixed(2) %></div>
+            <div class="small">Status: <%= o.deliveryStatus || o.status || 'processing' %></div>
+          </div>
+        </a>
+      <% }) %>
+    </div>
+  <% } %>
+</div>
+
+<%- include('partials/footer') %>

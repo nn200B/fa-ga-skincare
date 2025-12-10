@@ -1,0 +1,23 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Home' }) %>
+
+    <section class="hero">
+      <div class="hero-banner">
+        <div class="hero-overlay-content">
+          <div class="hero-brand-mark">GlowAura Skincare</div>
+          <div class="hero-eyebrow">Where purity meets power</div>
+          <h1>Discover our new plant‑based and coffee‑infused collections.</h1>
+          <p class="lead">Essential cruelty‑free skincare crafted to reveal a calm, radiant complexion while treading lightly on the planet.</p>
+          <div class="hero-cta-row">
+            <button class="btn btn-cta" id="heroShopBtn">Shop</button>
+            <span class="hero-secondary-link"><a href="/shopping">Shop the new collection</a></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      document.getElementById('heroShopBtn').addEventListener('click', function(){
+        window.location.href = '/shopping';
+      });
+    </script>
+<%- include('partials/footer') %>

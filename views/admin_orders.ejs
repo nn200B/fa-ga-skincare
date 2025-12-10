@@ -1,0 +1,56 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Admin Orders' }) %>
+
+<div class="container mt-4">
+  <h2>All Orders</h2>
+  <% if (typeof success !== 'undefined' && success && success.length) { %>
+    <div class="alert alert-success"><%= success.join('<br>') %></div>
+  <% } %>
+  <% if (typeof errors !== 'undefined' && errors && errors.length) { %>
+    <div class="alert alert-danger"><%= errors.join('<br>') %></div>
+  <% } %>
+  <% if (!orders || orders.length === 0) { %>
+    <p>No orders yet.</p>
+  <% } else { %>
+    <table class="table table-bordered">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User</th>
+          <th>Total</th>
+          <th>Placed</th>
+          <th>Status</th>
+          <th>New</th>
+          <th>Update status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% orders.forEach(function(o){ %>
+          <tr class="<%= o.new ? 'table-warning' : '' %>">
+            <td><a href="/orders/<%= o.id %>"><%= o.id %></a></td>
+            <td><%= o.userId %></td>
+            <td>$<%= Number(o.total || (o.subtotal + o.deliveryCost)).toFixed(2) %></td>
+            <td><%= new Date(o.createdAt).toLocaleString() %></td>
+            <td><%= o.deliveryStatus || o.status || 'processing' %></td>
+            <td><%= o.new ? 'YES' : 'NO' %></td>
+            <td>
+              <form method="post" action="/admin/orders/<%= o.id %>/status" style="display:inline-block;">
+                <input type="hidden" name="status" value="packed" />
+                <button class="btn btn-sm btn-outline-primary">Mark Packed</button>
+              </form>
+              <form method="post" action="/admin/orders/<%= o.id %>/status" style="display:inline-block;">
+                <input type="hidden" name="status" value="shipped" />
+                <button class="btn btn-sm btn-outline-secondary">Mark Shipped</button>
+              </form>
+              <form method="post" action="/admin/orders/<%= o.id %>/status" style="display:inline-block;">
+                <input type="hidden" name="status" value="delivered" />
+                <button class="btn btn-sm btn-outline-success">Mark Delivered</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</div>
+
+<%- include('partials/footer') %>
