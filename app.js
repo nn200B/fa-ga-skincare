@@ -108,7 +108,9 @@ const inMemory = {
     refundRequests: [],
     nextRefundId: 1,
     addressChangeRequests: [],
-    nextAddressChangeId: 1
+    nextAddressChangeId: 1,
+    users: [],
+    nextUserId: 1
 };
 
 // JSON-backed dev store (persist in SKIP_DB mode)
@@ -257,6 +259,60 @@ function addOrder(order, cb) {
         if (cb) cb(null, o);
     });
 }
+
+// ---------------- Membership & Points Helpers ----------------
+
+// Tier thresholds (Option A)
+const MEMBERSHIP_TIERS = [
+    { name: 'Bronze', min: 0, max: 499 },
+    { name: 'Silver', min: 500, max: 1499 },
+    { name: 'Gold', min: 1500, max: 2999 },
+    { name: 'Platinum', min: 3000, max: Infinity }
+];
+
+const POINTS_PER_DOLLAR = 1;
+const REDEEM_POINTS_FREE_DELIVERY = 300;
+
+function calculateTier(points) {
+    const p = Number(points) || 0;
+    for (let i = 0; i < MEMBERSHIP_TIERS.length; i++) {
+        const t = MEMBERSHIP_TIERS[i];
+        if (p >= t.min && p <= t.max) return t;
+    }
+    return MEMBERSHIP_TIERS[0];
+}
+
+function buildMembershipSummary(user) {
+    const points = user && typeof user.points !== 'undefined' ? Number(user.points) || 0 : 0;
+    const tier = calculateTier(points);
+    const idx = MEMBERSHIP_TIERS.findIndex(t => t.name === tier.name);
+    const next = idx >= 0 && idx < MEMBERSHIP_TIERS.length - 1 ? MEMBERSHIP_TIERS[idx + 1] : null;
+    const currentMax = tier.max === Infinity ? null : tier.max;
+    const nextTierPoints = next ? next.min : null;
+    const pointsToNext = next ? Math.max(0, next.min - points) : 0;
+    let progressPercent = 100;
+    if (next && currentMax) {
+        const range = next.min - tier.min;
+        const within = Math.min(points, next.min) - tier.min;
+        progressPercent = Math.max(0, Math.min(100, Math.round((within / range) * 100)));
+    }
+    return {
+        points,
+        tierName: tier.name,
+        nextTierName: next ? next.name : null,
+        nextTierPoints,
+        pointsToNext,
+        currentTierMax: currentMax,
+        progressPercent,
+        redeemCostFreeDelivery: REDEEM_POINTS_FREE_DELIVERY
+    };
+}
+
+// Membership page route
+app.get('/membership', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const membership = buildMembershipSummary(req.session.user || {});
+    res.render('membership', { user: req.session.user, membership });
+});
 
 function getOrdersByUser(userId, cb) {
     const list = (inMemory.orders || []).filter(o => String(o.userId) === String(userId)).slice().reverse();
@@ -1788,13 +1844,14 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
     const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
     const errors = req.flash('error');
     const success = req.flash('success');
-    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery });
+    const membership = buildMembershipSummary(req.session.user || {});
+    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership });
 });
 
 // POST checkout -> choose delivery & payment
 app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
     console.log('POST /checkout body:', req.body);
-    const { deliveryOption, paymentMethod } = req.body || {};
+    const { deliveryOption, paymentMethod, usePointsFreeDelivery } = req.body || {};
         const baseCart = req.session.cart || [];
         const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
             ? req.session.selectedCartItems
@@ -1810,6 +1867,7 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
         const now = new Date();
         const cutoffHour = 13; // 1pm
         let deliveryCost = 10;
+        let pointsRedeemed = 0;
 
         if (deliveryOption === 'one-day') {
                 if (now.getHours() >= cutoffHour) {
@@ -1818,6 +1876,15 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
                 }
                 deliveryCost = 25;
         }
+
+            // Membership: allow redeeming points for free normal delivery
+            const user = req.session.user || null;
+            const membership = buildMembershipSummary(user || {});
+            const wantsFreeDelivery = usePointsFreeDelivery === 'on' || usePointsFreeDelivery === '1';
+            if (wantsFreeDelivery && deliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+                deliveryCost = 0;
+                pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+            }
 
         const total = Number(subtotal) + Number(deliveryCost);
 
@@ -1863,7 +1930,11 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
                 last4: cardNumber.slice(-4),
                 cvv
             },
-            deliveryStatus: 'processing'
+            deliveryStatus: 'processing',
+            membership: {
+                pointsEarned: Math.floor(subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: pointsRedeemed
+            }
         });
 
         addOrder(toCreate, (err, created) => {
@@ -1898,6 +1969,26 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
             }
             const uid = getUserIdFromSessionUser(req.session.user);
             if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Award and redeem membership points for paid orders
+            try {
+                if (user && uid) {
+                    const earned = Math.floor(subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (pointsRedeemed > 0) {
+                        currentPoints = Math.max(0, currentPoints - pointsRedeemed);
+                    }
+                    req.session.user.points = currentPoints;
+                    // Optionally, persist to DB users table if available
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
 
             // Notifications for new paid order
             try {

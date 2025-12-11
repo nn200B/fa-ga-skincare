@@ -1216,6 +1216,15 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
   margin:0;
   color:#111827;
 }
+.order-membership-pill{
+  display:inline-flex;
+  align-items:center;
+  padding:3px 10px;
+  border-radius:999px;
+  background:#eff6ff;
+  color:#1d4ed8;
+  font-size:0.8rem;
+}
 .order-detail-address{
   font-size:0.92rem;
   color:#4b5563;
@@ -1263,6 +1272,105 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
 }
 .order-detail-history{
   margin-top:1.6rem;
+}
+
+/* Membership page */
+.membership-wrapper{
+  max-width:900px;
+}
+.membership-shell{
+  background:#fff;
+  border-radius:22px;
+  padding:2.5rem 2.75rem;
+  box-shadow:0 24px 60px rgba(15,23,42,0.12);
+}
+.membership-kicker{
+  text-transform:uppercase;
+  letter-spacing:.14em;
+  font-size:.72rem;
+  color:#a78b71;
+}
+.membership-title{
+  font-size:1.7rem;
+}
+.membership-tier-label{
+  font-size:.78rem;
+  text-transform:uppercase;
+  letter-spacing:.16em;
+  color:#a0a0a0;
+}
+.membership-tier-value{
+  font-size:1.2rem;
+  font-weight:600;
+}
+.membership-points{
+  font-size:.9rem;
+  color:#4b5563;
+}
+.membership-progress-label{
+  font-size:.86rem;
+}
+.membership-progress-bar{
+  width:100%;
+  height:10px;
+  border-radius:999px;
+  background:#f3f4f6;
+  overflow:hidden;
+}
+.membership-progress-fill{
+  height:100%;
+  background:linear-gradient(90deg,#f97316,#facc15);
+  border-radius:999px;
+}
+.membership-section-title{
+  font-size:1.1rem;
+  margin-bottom:.75rem;
+}
+.membership-list{
+  padding-left:1.1rem;
+  font-size:.9rem;
+}
+.membership-list li + li{
+  margin-top:.25rem;
+}
+.membership-tier-card{
+  border-radius:16px;
+  padding:1rem 1rem 1.1rem 1rem;
+  border:1px solid #e5e7eb;
+  background:#f9fafb;
+  height:100%;
+}
+.membership-tier-card.is-current{
+  border-color:#f97316;
+  background:linear-gradient(135deg,#fff7ed,#fffbeb);
+}
+.membership-tier-name{
+  font-weight:600;
+}
+.membership-tier-range{
+  font-size:.8rem;
+  color:#6b7280;
+}
+.membership-tier-copy{
+  margin-top:.35rem;
+  font-size:.82rem;
+  color:#4b5563;
+}
+
+/* Membership snippet on checkout */
+.membership-checkout-box{
+  background:#fffbeb;
+}
+.membership-mini-bar{
+  width:140px;
+  height:6px;
+  border-radius:999px;
+  background:#f3f4f6;
+  overflow:hidden;
+}
+.membership-mini-fill{
+  height:100%;
+  background:linear-gradient(90deg,#f97316,#facc15);
 }
 .order-detail-history-title{
   font-size:0.98rem;

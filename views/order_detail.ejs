@@ -45,6 +45,19 @@
                 <dd class="text-danger"><strong><%= order.refundStatus %></strong></dd>
               </div>
             <% } %>
+            <% if (order.membership) { %>
+              <div class="order-detail-def-row">
+                <dt>Membership</dt>
+                <dd>
+                  <span class="order-membership-pill">
+                    +<%= (Number(order.membership.pointsEarned) || 0) %> pts
+                    <% if (Number(order.membership.pointsRedeemed) || 0) { %>
+                      · used <%= Number(order.membership.pointsRedeemed) %> pts for free delivery
+                    <% } %>
+                  </span>
+                </dd>
+              </div>
+            <% } %>
           </dl>
         </div>
 
