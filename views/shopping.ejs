@@ -94,6 +94,23 @@
         </div>
       <% } %>
     </div>
+    <% if (typeof totalPages !== 'undefined' && totalPages > 1) { %>
+      <nav class="shop-pagination-wrapper" aria-label="Product pages">
+        <ul class="pagination shop-pagination justify-content-center mb-0">
+          <li class="page-item <%= page <= 1 ? 'disabled' : '' %>">
+            <a class="page-link" href="/shopping?<%= category ? 'category=' + encodeURIComponent(category) + '&' : '' %>page=<%= page - 1 %>">Previous</a>
+          </li>
+          <% for (let p = 1; p <= totalPages; p++) { %>
+            <li class="page-item <%= p === page ? 'active' : '' %>">
+              <a class="page-link" href="/shopping?<%= category ? 'category=' + encodeURIComponent(category) + '&' : '' %>page=<%= p %>"><%= p %></a>
+            </li>
+          <% } %>
+          <li class="page-item <%= page >= totalPages ? 'disabled' : '' %>">
+            <a class="page-link" href="/shopping?<%= category ? 'category=' + encodeURIComponent(category) + '&' : '' %>page=<%= page + 1 %>">Next</a>
+          </li>
+        </ul>
+      </nav>
+    <% } %>
   </div>
 
     

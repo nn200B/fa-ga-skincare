@@ -50,13 +50,7 @@
                     <input type="text" id="contact" name="contact" class="form-control form-control-lg" required
                         value="<%= formData && formData.contact ? formData.contact : '' %>">
                 </div>
-                <div class="mb-3">
-                    <label for="role" class="form-label">Role</label>
-                    <select id="role" name="role" class="form-select form-select-lg" required>
-                        <option value="user" <%= formData && formData.role === 'user' ? 'selected' : '' %>>User</option>
-                        <option value="admin" <%= formData && formData.role === 'admin' ? 'selected' : '' %>>Admin</option>
-                    </select>
-                </div>
+                <input type="hidden" id="role" name="role" value="user">
 
                 <!-- Biometric scan mimic -->
                 <div class="mb-3 mt-4">

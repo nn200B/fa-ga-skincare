@@ -70,9 +70,8 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
   justify-content: center;
   padding: 3rem 1rem;
   background:
-    linear-gradient(rgba(9, 10, 12, 0.82), rgba(9, 10, 12, 0.88)),
-    url('https://images.pexels.com/photos/3735612/pexels-photo-3735612.jpeg?auto=compress&cs=tinysrgb&w=1600')
-      center/cover no-repeat fixed;
+    linear-gradient(135deg, rgba(9, 10, 12, 0.9), rgba(15, 23, 42, 0.88)),
+    url('/images/auth_background.jpg') center/cover no-repeat fixed;
 }
 
 .auth-card {
@@ -450,8 +449,9 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
 .product-row{
   display:flex;
   flex-wrap:wrap;
-  gap:1.5rem;
-  margin-top:0.5rem;
+  gap:2rem;
+  margin-top:1rem;
+  margin-bottom:2.25rem;
 }
 .product-card{
   flex:1 1 calc(25% - 1.5rem);
@@ -512,6 +512,34 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
 
 .category-chip{border-radius:999px;border:1px solid #d4c7b6;padding:6px 18px;font-weight:500;background:#f6eee2;font-size:0.85rem;color:#5c5147;}
 .category-chip.active{background:#221814;color:#f9f3ea;border-color:#221814;}
+
+/* Shopping pagination styling */
+.shop-pagination-wrapper{
+  display:flex;
+  justify-content:center;
+  margin-bottom:2.75rem;
+}
+.shop-pagination .page-link{
+  border-radius:999px !important;
+  border-color:rgba(148,163,184,0.55);
+  color:#4b5563;
+  padding:0.35rem 0.9rem;
+  font-size:0.8rem;
+  background:rgba(255,255,255,0.8);
+}
+.shop-pagination .page-item.active .page-link{
+  background:#111827;
+  border-color:#111827;
+  color:#f9fafb;
+  box-shadow:0 10px 24px rgba(15,23,42,0.28);
+}
+.shop-pagination .page-item.disabled .page-link{
+  opacity:0.45;
+  background:rgba(249,250,251,0.9);
+}
+.shop-pagination .page-link:hover{
+  background:#e5e7eb;
+}
 .category-chip:nth-child(4n+1){background:#fef3e2;}
 .category-chip:nth-child(4n+2){background:#eaf7f3;border-color:#c0e1d7;}
 .category-chip:nth-child(4n+3){background:#eef0fb;border-color:#c7cbe9;}
@@ -648,6 +676,115 @@ button, .btn, input, select, textarea, .navbar, .nav-link{
   }
 }
 
+/* Admin inventory styling */
+.inventory-header h2{
+  font-size:1.6rem;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+.inventory-header p{
+  font-size:0.9rem;
+  color:#6b7280;
+}
+
+.inventory-card{
+  background:#fff;
+  border-radius:18px;
+  padding:1.5rem 1.75rem;
+  box-shadow:0 20px 55px rgba(15,23,42,0.12);
+  border:1px solid rgba(148,163,184,0.35);
+}
+
+.inventory-table thead th{
+  font-size:0.8rem;
+  text-transform:uppercase;
+  letter-spacing:0.18em;
+  color:#6b7280;
+  border-bottom-color:rgba(148,163,184,0.35);
+}
+
+.inventory-table tbody tr:hover{
+  background:rgba(249,250,251,0.9);
+}
+
+.inventory-product-name{
+  font-weight:600;
+  color:#111827;
+  text-decoration:none;
+}
+.inventory-product-name:hover{
+  text-decoration:underline;
+}
+
+.inventory-product-meta{
+  margin-top:0.25rem;
+  font-size:0.75rem;
+}
+
+.inventory-thumb-wrap{
+  width:72px;
+  height:72px;
+  border-radius:16px;
+  background:#f3f4f6;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  margin:0 auto;
+}
+.inventory-thumb{
+  max-width:100%;
+  max-height:100%;
+  object-fit:cover;
+}
+
+.inventory-stock-count{
+  font-weight:600;
+  padding:4px 10px;
+  border-radius:999px;
+  background:#f3f4ff;
+  color:#1d4ed8;
+  font-size:0.8rem;
+}
+
+.inventory-price{
+  font-weight:600;
+  color:#111827;
+}
+
+.inventory-action-link{
+  font-size:0.85rem;
+  font-weight:500;
+}
+
+.inventory-alert{
+  border-radius:14px;
+  border:none;
+  background:linear-gradient(135deg,#e0f2fe,#f5f3ff);
+  color:#0f172a;
+  box-shadow:0 10px 30px rgba(15,23,42,0.16);
+}
+
+.inventory-pill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:2px 10px;
+  border-radius:999px;
+  font-size:0.7rem;
+  text-transform:uppercase;
+  letter-spacing:0.16em;
+  background:#0f172a;
+  color:#f9fafb;
+}
+
+.inventory-add-btn{
+  border-radius:999px;
+  padding:0.45rem 1.4rem;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  font-size:0.75rem;
+}
 /* Order detail page */
 .order-detail-wrapper{
   max-width:1040px;

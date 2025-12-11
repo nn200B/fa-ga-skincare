@@ -671,22 +671,45 @@ app.post('/login', (req, res) => {
     });
 });
 
-app.get('/shopping', checkAuthenticated, checkNotAdmin, (req, res) => {
-        // Optional category filtering from query string.
-        const rawCategory = (req.query.category || '').trim();
-        const category = (rawCategory && String(rawCategory).toLowerCase() !== 'all') ? rawCategory : '';
+// Simple server-side pagination for shopping page
+const SHOP_PAGE_SIZE = 6; // products per page
 
-        // Load categories and products (DB or in-memory)
-        getCategories((cErr, cats) => {
-            const categories = (cErr || !cats) ? [] : (cats.map ? cats.map(r => r.name || r) : cats);
-            getProducts({ category }, (pErr, products) => {
-                if (pErr) {
-                    console.error('Failed to load products for shopping:', pErr);
-                    return res.status(500).send('Database error');
-                }
-                res.render('shopping', { user: req.session.user, products: products, category: category, categories });
+app.get('/shopping', checkAuthenticated, checkNotAdmin, (req, res) => {
+    // Optional category filtering from query string.
+    const rawCategory = (req.query.category || '').trim();
+    const category = (rawCategory && String(rawCategory).toLowerCase() !== 'all') ? rawCategory : '';
+
+    // Page number (1-based)
+    let page = parseInt(req.query.page || '1', 10);
+    if (isNaN(page) || page < 1) page = 1;
+
+    // Load categories and products (DB or in-memory)
+    getCategories((cErr, cats) => {
+        const categories = (cErr || !cats) ? [] : (cats.map ? cats.map(r => r.name || r) : cats);
+        getProducts({ category }, (pErr, products) => {
+            if (pErr) {
+                console.error('Failed to load products for shopping:', pErr);
+                return res.status(500).send('Database error');
+            }
+
+            const totalItems = products.length;
+            const totalPages = Math.max(Math.ceil(totalItems / SHOP_PAGE_SIZE) || 1, 1);
+            const currentPage = Math.min(page, totalPages);
+            const startIdx = (currentPage - 1) * SHOP_PAGE_SIZE;
+            const endIdx = startIdx + SHOP_PAGE_SIZE;
+            const pageProducts = products.slice(startIdx, endIdx);
+
+            res.render('shopping', {
+                user: req.session.user,
+                products: pageProducts,
+                category: category,
+                categories,
+                page: currentPage,
+                totalPages,
+                totalItems
             });
         });
+    });
 });
 
 // Allow guests to add to cart (no login required). Admins are still blocked.
