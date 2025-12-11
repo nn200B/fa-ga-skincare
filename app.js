@@ -6,6 +6,7 @@ const multer = require('multer');
 const app = express();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -382,6 +383,14 @@ function updateOrderStatus(orderId, newStatus, cb) {
     persistStore(() => {
         if (cb) cb(null, o);
     });
+}
+
+// Helper to get the current logged-in user id from session user
+function getUserIdFromSessionUser(user) {
+    if (!user) return null;
+    if (user.id) return user.id;
+    if (user.userId) return user.userId;
+    return null;
 }
 
 function addProduct(data, cb) {
@@ -1867,6 +1876,28 @@ app.get('/orders/:id', checkAuthenticated, (req, res) => {
     if (String(o.userId) !== String(uid) && !(req.session.user && req.session.user.role === 'admin')) return res.status(403).send('Access denied');
     o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
     res.render('order_detail', { order: o, user: req.session.user });
+});
+
+// User: invoice / print view for a single order
+app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
+    const id = req.params.id;
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    if (!o) {
+        req.flash('error', 'Order not found.');
+        return res.redirect('/orders');
+    }
+
+    // Only the owner user or an admin can view this invoice
+    if (String(o.userId) !== String(uid) && !(req.session.user && req.session.user.role === 'admin')) {
+        req.flash('error', 'You are not allowed to view this invoice.');
+        return res.redirect('/orders');
+    }
+
+    // Ensure estimatedDelivery is present if the template ever needs it
+    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
+
+    res.render('invoice', { order: o, user: req.session.user });
 });
 
 // Admin: view all orders
