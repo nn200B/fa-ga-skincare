@@ -371,6 +371,14 @@ function markNotificationRead(id, cb) {
     persistStore(() => cb && cb(null, n));
 }
 
+function markNotificationUnread(id, cb) {
+    const n = (inMemory.notifications || []).find(x => String(x.id) === String(id));
+    if (!n) return cb && cb(new Error('Notification not found'));
+    n.read = false;
+    delete n.readAt;
+    persistStore(() => cb && cb(null, n));
+}
+
 function updateOrderStatus(orderId, newStatus, cb) {
     const o = (inMemory.orders || []).find(x => String(x.id) === String(orderId));
     if (!o) {
@@ -548,6 +556,34 @@ const checkNotAdmin = (req, res, next) => {
     return next();
 };
 
+// Helper: load full user row by id
+function getUserById(id, cb){
+    if (!id) return cb(new Error('Missing user id'));
+    connection.query('SELECT * FROM users WHERE id = ?', [id], (err, rows) => {
+        if (err) return cb(err);
+        cb(null, rows && rows[0]);
+    });
+}
+
+// Helper: update basic profile fields
+function updateUserProfile(id, data, cb){
+    const { username, email, address, contact } = data;
+    connection.query(
+        'UPDATE users SET username = ?, email = ?, address = ?, contact = ? WHERE id = ?',
+        [username, email, address, contact, id],
+        (err, result) => cb(err, result)
+    );
+}
+
+// Helper: update password using SHA1 like existing code
+function updateUserPassword(id, newPassword, cb){
+    connection.query(
+        'UPDATE users SET password = SHA1(?) WHERE id = ?',
+        [newPassword, id],
+        (err, result) => cb(err, result)
+    );
+}
+
 // Middleware for form validation
 const validateRegistration = (req, res, next) => {
     const { username, email, password, address, contact, role } = req.body;
@@ -668,6 +704,141 @@ app.post('/login', (req, res) => {
             req.flash('error', 'Invalid email or password.');
             res.redirect('/login');
         }
+    });
+});
+
+// Profile page (both user and admin)
+app.get('/profile', checkAuthenticated, (req, res) => {
+    const sessionUser = req.session.user;
+    getUserById(sessionUser.id, (err, dbUser) => {
+        if (err || !dbUser) {
+            console.error('Failed to load profile user:', err);
+            req.flash('error', 'Could not load profile.');
+            return res.redirect('/');
+        }
+        const formData = {
+            username: dbUser.username,
+            email: dbUser.email,
+            address: dbUser.address,
+            contact: dbUser.contact
+        };
+        res.render('profile', {
+            user: dbUser,
+            messages: req.flash('success'),
+            errors: req.flash('error'),
+            formData,
+            passwordStep: req.session.passwordStep || 'start',
+            otpHint: req.session.passwordOtpHint || null
+        });
+    });
+});
+
+// Update profile details
+app.post('/profile', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { username, email, address, contact } = req.body;
+    if (!username || !email) {
+        req.flash('error', 'Name and email are required.');
+        return res.redirect('/profile');
+    }
+    updateUserProfile(uid, { username, email, address, contact }, (err) => {
+        if (err) {
+            console.error('Failed to update profile:', err);
+            req.flash('error', 'Could not update profile.');
+            return res.redirect('/profile');
+        }
+        // keep session in sync for navbar greeting etc.
+        if (req.session.user) {
+            req.session.user.username = username;
+            req.session.user.email = email;
+            req.session.user.address = address;
+            req.session.user.contact = contact;
+        }
+        req.flash('success', 'Profile updated successfully.');
+        res.redirect('/profile');
+    });
+});
+
+// Step 1: request OTP for password change
+app.post('/profile/password/request-otp', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { currentPassword, newPassword, newPassword2 } = req.body;
+    if (!currentPassword || !newPassword || !newPassword2) {
+        req.flash('error', 'Please fill in all password fields.');
+        return res.redirect('/profile');
+    }
+    if (newPassword !== newPassword2) {
+        req.flash('error', 'New passwords do not match.');
+        return res.redirect('/profile');
+    }
+    if (newPassword.length < 6) {
+        req.flash('error', 'New password should be at least 6 characters.');
+        return res.redirect('/profile');
+    }
+    // verify current password
+    connection.query('SELECT * FROM users WHERE id = ? AND password = SHA1(?)', [uid, currentPassword], (err, rows) => {
+        if (err) {
+            console.error('Error verifying current password:', err);
+            req.flash('error', 'Could not verify current password.');
+            return res.redirect('/profile');
+        }
+        if (!rows || rows.length === 0) {
+            req.flash('error', 'Current password is incorrect.');
+            return res.redirect('/profile');
+        }
+        // generate OTP and store in session with short expiry
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        req.session.passwordOtp = otp;
+        req.session.passwordOtpExpires = Date.now() + 5 * 60 * 1000; // 5 minutes
+        req.session.passwordNew = newPassword;
+        req.session.passwordStep = 'otp';
+        // For this assignment, show OTP on screen as a hint (simulated SMS/email)
+        req.session.passwordOtpHint = otp;
+        req.flash('success', 'We have generated a one-time code. Enter it below to confirm your new password.');
+        res.redirect('/profile');
+    });
+});
+
+// Step 2: confirm OTP and change password
+app.post('/profile/password/confirm', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { otp } = req.body;
+    const storedOtp = req.session.passwordOtp;
+    const expiresAt = req.session.passwordOtpExpires;
+    const newPassword = req.session.passwordNew;
+
+    if (!storedOtp || !expiresAt || !newPassword) {
+        req.flash('error', 'No active password change request. Please try again.');
+        return res.redirect('/profile');
+    }
+    if (Date.now() > expiresAt) {
+        req.flash('error', 'The one-time code has expired. Please start again.');
+        req.session.passwordOtp = null;
+        req.session.passwordOtpExpires = null;
+        req.session.passwordNew = null;
+        req.session.passwordStep = 'start';
+        req.session.passwordOtpHint = null;
+        return res.redirect('/profile');
+    }
+    if (!otp || otp.trim() !== String(storedOtp)) {
+        req.flash('error', 'The one-time code is incorrect.');
+        return res.redirect('/profile');
+    }
+
+    updateUserPassword(uid, newPassword, (err) => {
+        if (err) {
+            console.error('Failed to update password:', err);
+            req.flash('error', 'Could not update password.');
+            return res.redirect('/profile');
+        }
+        // clear sensitive session fields
+        req.session.passwordOtp = null;
+        req.session.passwordOtpExpires = null;
+        req.session.passwordNew = null;
+        req.session.passwordStep = 'start';
+        req.session.passwordOtpHint = null;
+        req.flash('success', 'Your password has been updated.');
+        res.redirect('/profile');
     });
 });
 
@@ -798,6 +969,41 @@ app.post('/add-to-cart/:id', checkNotAdmin, (req, res) => {
 app.get('/cart', checkAuthenticated, checkNotAdmin, (req, res) => {
     const cart = req.session.cart || [];
     res.render('cart', { cart, user: req.session.user });
+});
+
+// Update quantity for a cart item
+app.post('/cart/update', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const pid = req.body.productId || req.body.pid;
+    let qty = parseInt(req.body.quantity, 10);
+    if (!pid || isNaN(qty)) {
+        req.flash('error', 'Invalid quantity update.');
+        return res.redirect('/cart');
+    }
+    if (qty < 1) qty = 1;
+
+    if (!Array.isArray(req.session.cart)) req.session.cart = [];
+    const item = req.session.cart.find(it => String(it.productId) === String(pid));
+    if (!item) {
+        req.flash('error', 'Item not found in cart.');
+        return res.redirect('/cart');
+    }
+
+    item.quantity = qty;
+
+    // persist updated cart to DB for logged-in user
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const finish = () => {
+        req.flash('success', 'Cart updated.');
+        res.redirect('/cart');
+    };
+    if (uid) {
+        saveCartToDB(uid, req.session.cart, (err) => {
+            if (err) console.error('Failed to save cart after quantity update:', err);
+            finish();
+        });
+    } else {
+        finish();
+    }
 });
 
 // Handle selection of items from cart for checkout
@@ -1233,18 +1439,45 @@ app.post('/admin/help-center/address-change/:id/decision', checkAuthenticated, c
 
 // Notifications center for both user and admin
 app.get('/notifications', checkAuthenticated, (req, res) => {
+    const filter = (req.query.filter || 'all').toLowerCase(); // 'all' | 'unread' | 'read'
     getNotificationsForUser(req.session.user, (err, list) => {
         if (err) {
             console.error('Failed to load notifications:', err);
             req.flash('error', 'Could not load notifications');
             return res.redirect('/');
         }
+        const allList = list || [];
+        let filtered = allList;
+        if (filter === 'unread') {
+            filtered = allList.filter(n => !n.read);
+        } else if (filter === 'read') {
+            filtered = allList.filter(n => n.read);
+        }
         res.render('notifications', {
             user: req.session.user,
-            notifications: list || [],
+            notifications: filtered,
+            filter,
+            totalUnread: allList.filter(n => !n.read).length,
             errors: req.flash('error'),
             success: req.flash('success')
         });
+    });
+});
+
+// Toggle notification read/unread state
+app.post('/notifications/:id/read', checkAuthenticated, (req, res) => {
+    markNotificationRead(req.params.id, (err) => {
+        if (err) console.error('Failed to mark notification read:', err);
+        const redirectTo = req.get('Referer') || '/notifications';
+        res.redirect(redirectTo);
+    });
+});
+
+app.post('/notifications/:id/unread', checkAuthenticated, (req, res) => {
+    markNotificationUnread(req.params.id, (err) => {
+        if (err) console.error('Failed to mark notification unread:', err);
+        const redirectTo = req.get('Referer') || '/notifications';
+        res.redirect(redirectTo);
     });
 });
 

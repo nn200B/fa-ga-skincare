@@ -1,8 +1,18 @@
 <%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Notifications' }) %>
 
-<div class="container mt-4 mb-5">
-  <h2 class="mb-3">Notifications</h2>
-  <p class="text-muted mb-4">See updates related to your orders and requests.</p>
+<% var currentFilter = (typeof filter !== 'undefined' && filter) ? filter : 'all'; %>
+
+<div class="container mt-5 mb-5 notifications-wrapper">
+  <div class="notifications-shell">
+    <header class="notifications-header d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <div>
+        <p class="notifications-kicker mb-1">Order & help center updates</p>
+        <h2 class="notifications-title mb-0">Notifications</h2>
+      </div>
+      <% if (typeof totalUnread !== 'undefined' && totalUnread > 0) { %>
+        <span class="badge rounded-pill notifications-unread-pill"><%= totalUnread %> unread</span>
+      <% } %>
+    </header>
 
   <% if (typeof errors !== 'undefined' && errors.length) { %>
     <div class="alert alert-danger">
@@ -23,22 +33,44 @@
     </div>
   <% } %>
 
-  <div class="list-group">
+  <div class="notifications-filters mb-3 d-flex flex-wrap align-items-center gap-2">
+    <div class="btn-group" role="group" aria-label="Filter notifications">
+      <a href="/notifications?filter=all" class="btn btn-sm notifications-tab <%= (!currentFilter || currentFilter === 'all') ? 'active' : '' %>">All</a>
+      <a href="/notifications?filter=unread" class="btn btn-sm notifications-tab <%= currentFilter === 'unread' ? 'active' : '' %>">Unread</a>
+      <a href="/notifications?filter=read" class="btn btn-sm notifications-tab <%= currentFilter === 'read' ? 'active' : '' %>">Read</a>
+    </div>
+  </div>
+
+  <div class="notifications-list">
     <% if (!notifications || !notifications.length) { %>
-      <div class="list-group-item text-muted">No notifications yet.</div>
+      <div class="notifications-empty text-muted">No notifications in this view yet.</div>
     <% } else { %>
       <% notifications.forEach(function(n){ %>
-        <a href="<%= n.link || '#' %>?notif=<%= n.id %>" class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
-          <div class="me-auto">
-            <div class="fw-semibold"><%= n.message %></div>
-            <small class="text-muted"><%= new Date(n.createdAt).toLocaleString('en-SG',{dateStyle:'short', timeStyle:'short'}) %></small>
+        <article class="notification-item <%= n.read ? 'is-read' : 'is-unread' %>">
+          <a href="<%= n.link || '#' %>?notif=<%= n.id %>" class="notification-main">
+            <div class="notification-badge"><%= (n.type || 'Update') %></div>
+            <div class="notification-text">
+              <p class="notification-message mb-1"><%= n.message %></p>
+              <p class="notification-meta mb-0"><%= new Date(n.createdAt).toLocaleString('en-SG',{dateStyle:'short', timeStyle:'short'}) %></p>
+            </div>
+          </a>
+          <div class="notification-actions text-end">
+            <% if (!n.read) { %>
+              <span class="badge notifications-new-pill mb-2">New</span>
+              <form action="/notifications/<%= n.id %>/read" method="POST">
+                <button class="btn btn-sm btn-outline-dark">Mark as read</button>
+              </form>
+            <% } else { %>
+              <form action="/notifications/<%= n.id %>/unread" method="POST">
+                <button class="btn btn-sm btn-outline-secondary">Mark as unread</button>
+              </form>
+            <% } %>
           </div>
-          <% if (!n.read) { %>
-            <span class="badge bg-primary rounded-pill">New</span>
-          <% } %>
-        </a>
+        </article>
       <% }) %>
     <% } %>
+  </div>
+
   </div>
 </div>
 

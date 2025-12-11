@@ -130,24 +130,24 @@
       "userId": 5,
       "items": [
         {
-          "productId": 4,
-          "productName": "Midnight Repair Retinol Serum",
-          "price": "79.00",
-          "quantity": 3,
-          "image": "serum_retinol_midnight.png"
+          "productId": 3,
+          "productName": "Radiance Vitamin C Serum 15%",
+          "price": "69.00",
+          "quantity": 1,
+          "image": "serum_vitc_15.png"
         }
       ],
-      "subtotal": 237,
+      "subtotal": 69,
       "deliveryOption": "normal",
       "deliveryCost": 10,
-      "total": 247,
+      "total": 79,
       "paymentMethod": "card",
       "delivery": {
-        "fullName": "rtyhjuk",
-        "street": "t45y6",
-        "unit": "rty",
-        "postalCode": "546",
-        "note": "ertyh"
+        "fullName": "rety",
+        "street": "retr",
+        "unit": "wret",
+        "postalCode": "werfrew",
+        "note": "rg"
       },
       "status": "paid",
       "paymentDetails": {
@@ -158,7 +158,7 @@
       },
       "deliveryStatus": "processing",
       "id": 1,
-      "createdAt": "2025-12-10T16:35:49.555Z"
+      "createdAt": "2025-12-11T05:31:43.175Z"
     }
   ],
   "nextOrderId": 2,
@@ -170,7 +170,7 @@
       "type": "order",
       "message": "New paid order #1 from n.",
       "link": "/admin/orders",
-      "createdAt": "2025-12-10T16:35:49.560Z",
+      "createdAt": "2025-12-11T05:31:43.184Z",
       "read": false
     },
     {
@@ -180,7 +180,7 @@
       "type": "order",
       "message": "Your order #1 has been placed successfully.",
       "link": "/orders/1",
-      "createdAt": "2025-12-10T16:35:49.561Z",
+      "createdAt": "2025-12-11T05:31:43.185Z",
       "read": false
     }
   ],
