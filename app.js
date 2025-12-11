@@ -621,6 +621,19 @@ function getUserById(id, cb){
     });
 }
 
+// Helper: get all users (for admin user management)
+function getAllUsers(cb){
+    connection.query('SELECT id, username, email, role, points FROM users ORDER BY id ASC', (err, rows) => {
+        if (err) return cb(err);
+        const list = (rows || []).map(r => {
+            const u = Object.assign({}, r);
+            u.membership = buildMembershipSummary({ points: u.points || 0 });
+            return u;
+        });
+        cb(null, list);
+    });
+}
+
 // Helper: update basic profile fields
 function updateUserProfile(id, data, cb){
     const { username, email, address, contact } = data;
@@ -673,6 +686,54 @@ app.get('/inventory', checkAuthenticated, checkAdmin, (req, res) => {
                 res.render('inventory', { products: products, user: req.session.user, categories });
             });
         });
+});
+
+// Admin user management
+app.get('/admin/users', checkAuthenticated, checkAdmin, (req, res) => {
+    getAllUsers((err, users) => {
+        if (err) {
+            console.error('Failed to load users for admin:', err);
+            req.flash('error', 'Could not load users.');
+            return res.redirect('/inventory');
+        }
+        const errors = req.flash('error');
+        const success = req.flash('success');
+        res.render('admin_users', { user: req.session.user, users: users || [], errors, success });
+    });
+});
+
+app.post('/admin/users/:id/delete', checkAuthenticated, checkAdmin, (req, res) => {
+    const id = req.params.id;
+    if (!id) {
+        req.flash('error', 'Missing user id.');
+        return res.redirect('/admin/users');
+    }
+    // prevent deleting admins
+    connection.query('SELECT role FROM users WHERE id = ?', [id], (err, rows) => {
+        if (err) {
+            console.error('Failed to check user role before delete:', err);
+            req.flash('error', 'Could not delete user.');
+            return res.redirect('/admin/users');
+        }
+        const row = rows && rows[0];
+        if (!row) {
+            req.flash('error', 'User not found.');
+            return res.redirect('/admin/users');
+        }
+        if (row.role === 'admin') {
+            req.flash('error', 'Cannot delete admin accounts.');
+            return res.redirect('/admin/users');
+        }
+        connection.query('DELETE FROM users WHERE id = ?', [id], (delErr) => {
+            if (delErr) {
+                console.error('Failed to delete user:', delErr);
+                req.flash('error', 'Could not delete user.');
+            } else {
+                req.flash('success', 'User deleted.');
+            }
+            return res.redirect('/admin/users');
+        });
+    });
 });
 
 app.get('/register', (req, res) => {
