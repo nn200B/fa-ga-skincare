@@ -24,3 +24,16 @@ ReferenceError: Cannot access 'checkAuthenticated' before initialization
     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
     at node:internal/main/run_main_module:33:47
 
+UNCAUGHT: 2025-12-11T05:50:41.091Z
+ReferenceError: Cannot access 'checkAuthenticated' before initialization
+ReferenceError: Cannot access 'checkAuthenticated' before initialization
+    at Object.<anonymous> (C:\Users\nickn\OneDrive - Republic Polytechnic\2425 S1\C372 Payment tech\CA1 C372 TEAM FA\FA GA SKINCARE\app.js:312:24)
+    at Module._compile (node:internal/modules/cjs/loader:1761:14)
+    at Object..js (node:internal/modules/cjs/loader:1893:10)
+    at Module.load (node:internal/modules/cjs/loader:1481:32)
+    at Module._load (node:internal/modules/cjs/loader:1300:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+

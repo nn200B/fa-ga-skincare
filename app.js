@@ -308,12 +308,6 @@ function buildMembershipSummary(user) {
     };
 }
 
-// Membership page route
-app.get('/membership', checkAuthenticated, checkNotAdmin, (req, res) => {
-    const membership = buildMembershipSummary(req.session.user || {});
-    res.render('membership', { user: req.session.user, membership });
-});
-
 function getOrdersByUser(userId, cb) {
     const list = (inMemory.orders || []).filter(o => String(o.userId) === String(userId)).slice().reverse();
     if (cb) cb(null, list);
@@ -611,6 +605,12 @@ const checkNotAdmin = (req, res, next) => {
     }
     return next();
 };
+
+    // Membership page route (requires auth, user-only)
+    app.get('/membership', checkAuthenticated, checkNotAdmin, (req, res) => {
+        const membership = buildMembershipSummary(req.session.user || {});
+        res.render('membership', { user: req.session.user, membership });
+    });
 
 // Helper: load full user row by id
 function getUserById(id, cb){
