@@ -7,6 +7,14 @@ const app = express();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const OrderController = require('./controllers/OrderController');
+const OrderModel = require('./models/Order');
+const NotificationModel = require('./models/Notification');
+const HelpCenterController = require('./controllers/HelpCenterController');
+const CategoryController = require('./controllers/CategoryController');
+const NotificationController = require('./controllers/NotificationController');
+const ProfileController = require('./controllers/ProfileController');
+const { addBusinessDays, estimateDeliveryDate } = require('./utils/orderUtils');
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -826,28 +834,7 @@ app.post('/login', (req, res) => {
 
 // Profile page (both user and admin)
 app.get('/profile', checkAuthenticated, (req, res) => {
-    const sessionUser = req.session.user;
-    getUserById(sessionUser.id, (err, dbUser) => {
-        if (err || !dbUser) {
-            console.error('Failed to load profile user:', err);
-            req.flash('error', 'Could not load profile.');
-            return res.redirect('/');
-        }
-        const formData = {
-            username: dbUser.username,
-            email: dbUser.email,
-            address: dbUser.address,
-            contact: dbUser.contact
-        };
-        res.render('profile', {
-            user: dbUser,
-            messages: req.flash('success'),
-            errors: req.flash('error'),
-            formData,
-            passwordStep: req.session.passwordStep || 'start',
-            otpHint: req.session.passwordOtpHint || null
-        });
-    });
+    ProfileController.renderProfile(req, res, getUserById);
 });
 
 // Update profile details
@@ -1360,8 +1347,7 @@ app.get('/categories_user', checkAuthenticated, (req, res) => {
             console.error('Failed to load categories:', err);
             return res.status(500).send('Failed to load categories');
         }
-        const categories = rows || [];
-        return res.render('categories_user', { categories, user: req.session.user });
+        return CategoryController.renderUserCategories(req, res, rows || []);
     });
 });
 
@@ -1374,18 +1360,13 @@ app.get('/admin/categories', checkAuthenticated, checkAdmin, (req, res) => {
             return res.redirect('/inventory');
         }
         const categories = catRows || [];
-        // load all products once, then group by category name
         getProducts({}, (pErr, products) => {
             if (pErr) {
                 console.error('Failed to load products for admin categories:', pErr);
                 req.flash('error', 'Could not load products');
                 return res.redirect('/inventory');
             }
-            const grouped = categories.map(c => {
-                const items = (products || []).filter(p => (p.category || '') === c.name);
-                return { category: c, products: items };
-            });
-            res.render('categories', { user: req.session.user, groupedCategories: grouped });
+            CategoryController.renderAdminCategories(req, res, categories, products || []);
         });
     });
 });
@@ -1425,23 +1406,7 @@ app.post('/admin/categories/:id/delete', checkAuthenticated, checkAdmin, (req, r
 
 // Admin view of help center requests
 app.get('/admin/help-center', checkAuthenticated, checkAdmin, (req, res) => {
-    getRefunds((rErr, refunds) => {
-        if (rErr) {
-            console.error('Failed to load refunds:', rErr);
-        }
-        getAddressChangeRequests((aErr, addressChanges) => {
-            if (aErr) {
-                console.error('Failed to load address changes:', aErr);
-            }
-            res.render('admin_help_center', {
-                user: req.session.user,
-                refunds: refunds || [],
-                addressChanges: addressChanges || [],
-                errors: req.flash('error'),
-                success: req.flash('success')
-            });
-        });
-    });
+    HelpCenterController.renderAdminHelpCenter(req, res, inMemory);
 });
 
 // Admin takes decision on refund: approve or reject
@@ -1556,29 +1521,7 @@ app.post('/admin/help-center/address-change/:id/decision', checkAuthenticated, c
 
 // Notifications center for both user and admin
 app.get('/notifications', checkAuthenticated, (req, res) => {
-    const filter = (req.query.filter || 'all').toLowerCase(); // 'all' | 'unread' | 'read'
-    getNotificationsForUser(req.session.user, (err, list) => {
-        if (err) {
-            console.error('Failed to load notifications:', err);
-            req.flash('error', 'Could not load notifications');
-            return res.redirect('/');
-        }
-        const allList = list || [];
-        let filtered = allList;
-        if (filter === 'unread') {
-            filtered = allList.filter(n => !n.read);
-        } else if (filter === 'read') {
-            filtered = allList.filter(n => n.read);
-        }
-        res.render('notifications', {
-            user: req.session.user,
-            notifications: filtered,
-            filter,
-            totalUnread: allList.filter(n => !n.read).length,
-            errors: req.flash('error'),
-            success: req.flash('success')
-        });
-    });
+    NotificationController.renderNotifications(req, res, inMemory.notifications || []);
 });
 
 // Toggle notification read/unread state
@@ -1844,30 +1787,6 @@ app.get('/_test/login', (req, res) => {
 
 // ------------------ Orders / Checkout / Payment routes ------------------
 
-function addBusinessDays(date, days) {
-    const d = new Date(date);
-    let added = 0;
-    while (added < days) {
-        d.setDate(d.getDate() + 1);
-        const day = d.getDay(); // 0 Sun, 6 Sat
-        if (day !== 0 && day !== 6) added++;
-    }
-    return d;
-}
-
-function estimateDeliveryDate(createdAtIso, deliveryOption) {
-    try {
-        const created = new Date(createdAtIso || new Date().toISOString());
-        if (deliveryOption === 'one-day') {
-            return addBusinessDays(created, 1).toISOString();
-        }
-        // normal -> 3 business days
-        return addBusinessDays(created, 3).toISOString();
-    } catch (e) {
-        return new Date().toISOString();
-    }
-}
-
 // Delivery details page
 app.get('/delivery-details', checkAuthenticated, checkNotAdmin, (req, res) => {
     const cart = req.session.cart || [];
@@ -2121,29 +2040,7 @@ app.post('/pay/qr/:id/confirm', checkAuthenticated, checkNotAdmin, (req, res) =>
 
 // User Help Center
 app.get('/help-center', checkAuthenticated, checkNotAdmin, (req, res) => {
-    const userId = getUserIdFromSessionUser(req.session.user);
-    getOrdersByUser(userId, (err, orders) => {
-        if (err) {
-            console.error('Failed to load orders for help center:', err);
-            req.flash('error', 'Could not load orders');
-            return res.redirect('/orders');
-        }
-        const eligibleAddressOrders = (orders || []).filter(o => {
-            const status = (o.deliveryStatus || '').toLowerCase();
-            // Treat both "packed" and "item packed" as eligible
-            return status === 'packed' || status === 'item packed';
-        });
-        const refundableOrders = (orders || []).filter(o => (o.status || '').toLowerCase() === 'paid');
-        const errors = req.flash('error');
-        const success = req.flash('success');
-        res.render('help_center', {
-            user: req.session.user,
-            eligibleAddressOrders,
-            refundableOrders,
-            errors,
-            success
-        });
-    });
+    HelpCenterController.renderUserHelpCenter(req, res, inMemory.orders || [], getUserIdFromSessionUser);
 });
 
 app.post('/help-center/address-change', checkAuthenticated, checkNotAdmin, (req, res) => {
@@ -2260,37 +2157,25 @@ app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) =>
 // User: list orders
 app.get('/orders', checkAuthenticated, (req, res) => {
     const uid = getUserIdFromSessionUser(req.session.user);
-    getOrdersByUser(uid, (err, orders) => {
-        // Ignore any error and always show the page
-        if (err) {
-            console.error('Failed to fetch orders:', err);
-        }
-
-        const safeOrders = (orders || []).map(o => {
-            o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-            return o;
+    const orders = OrderModel.getOrdersByUser(inMemory.orders, uid);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
         });
-
-        return res.render('orders', { orders: safeOrders, user: req.session.user });
     });
+    return res.render('orders', { orders: safeOrders, user: req.session.user });
 });
 
 // User: order detail
 app.get('/orders/:id', checkAuthenticated, (req, res) => {
-    const id = req.params.id;
-    const uid = getUserIdFromSessionUser(req.session.user);
-    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
-    if (!o) return res.status(404).send('Order not found');
-    if (String(o.userId) !== String(uid) && !(req.session.user && req.session.user.role === 'admin')) return res.status(403).send('Access denied');
-    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-    res.render('order_detail', { order: o, user: req.session.user });
+    return OrderController.showOrderDetail(req, res, inMemory.orders);
 });
 
 // User: invoice / print view for a single order
 app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
     const id = req.params.id;
     const uid = getUserIdFromSessionUser(req.session.user);
-    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    const o = OrderModel.getOrderById(inMemory.orders, id);
     if (!o) {
         req.flash('error', 'Order not found.');
         return res.redirect('/orders');
@@ -2302,28 +2187,25 @@ app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
         return res.redirect('/orders');
     }
 
-    // Ensure estimatedDelivery is present if the template ever needs it
-    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
+    const withDelivery = Object.assign({}, o, {
+        estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
+    });
 
-    res.render('invoice', { order: o, user: req.session.user });
+    res.render('invoice', { order: withDelivery, user: req.session.user });
 });
 
 // Admin: view all orders
 app.get('/admin/orders', checkAuthenticated, checkAdmin, (req, res) => {
-    getAllOrders((err, orders) => {
-        if (err) {
-            console.error('Failed to fetch all orders:', err);
-        }
-
-        const safeOrders = (orders || []).map(o => {
-            o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-            return o;
+    const orders = OrderModel.getAllOrders(inMemory.orders);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
         });
-
-        const errors = req.flash('error');
-        const success = req.flash('success');
-        return res.render('admin_orders', { orders: safeOrders, user: req.session.user, errors, success });
     });
+
+    const errors = req.flash('error');
+    const success = req.flash('success');
+    return res.render('admin_orders', { orders: safeOrders, user: req.session.user, errors, success });
 });
 
 // Admin: update order status
