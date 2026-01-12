@@ -1,0 +1,93 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'Membership' }) %>
+
+<div class="container mt-5 mb-5 membership-wrapper">
+  <div class="membership-shell">
+    <header class="mb-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+      <div class="d-flex align-items-center gap-3">
+        <div class="membership-orb">
+          <span class="membership-orb-icon">★</span>
+        </div>
+        <div>
+          <p class="membership-kicker mb-1">GlowAura Rewards</p>
+          <h1 class="membership-title mb-0">Membership & points</h1>
+          <p class="text-muted mb-0">Track your ritual points, tier, and perks for every order.</p>
+        </div>
+      </div>
+      <div class="text-end">
+        <div class="membership-tier-label">Current tier</div>
+        <div class="membership-tier-value"><%= membership.tierName %></div>
+        <div class="membership-points">Points: <strong><%= membership.points %></strong></div>
+      </div>
+    </header>
+
+    <section class="mb-4">
+      <div class="membership-progress-label d-flex justify-content-between align-items-center mb-2">
+        <span>Progress to <%= membership.nextTierName || membership.tierName %></span>
+        <span><%= membership.points %> / <%= membership.nextTierPoints || membership.currentTierMax || membership.points %> pts</span>
+      </div>
+      <div class="membership-progress-bar">
+        <div class="membership-progress-fill" style="width:<%= membership.progressPercent %>%;"></div>
+      </div>
+      <% if (membership.nextTierName) { %>
+        <p class="small text-muted mt-2">Earn <strong><%= membership.pointsToNext %></strong> more points to reach <strong><%= membership.nextTierName %></strong>.</p>
+      <% } else { %>
+        <p class="small text-muted mt-2">You’re at the highest tier. Every order still earns points and keeps your status.</p>
+      <% } %>
+    </section>
+
+    <section class="mb-4">
+      <h2 class="membership-section-title">How points work</h2>
+      <ul class="membership-list">
+        <li>Earn <strong>1 point</strong> for every <strong>$1</strong> spent on paid orders.</li>
+        <li>Points can be used to <strong>redeem free delivery</strong> on eligible checkouts.</li>
+        <li>We automatically track your tier, so you unlock more perks as you spend.</li>
+      </ul>
+    </section>
+
+    <section class="mb-4">
+      <h2 class="membership-section-title">Tiers & thresholds</h2>
+      <div class="row g-3">
+        <div class="col-md-3 col-6">
+          <div class="membership-tier-card <%= membership.tierName === 'Bronze' ? 'is-current' : '' %>">
+            <div class="membership-tier-name">Bronze</div>
+            <div class="membership-tier-range">0 – 499 pts</div>
+            <p class="membership-tier-copy">Welcome tier with access to shopping and basic perks.</p>
+          </div>
+        </div>
+        <div class="col-md-3 col-6">
+          <div class="membership-tier-card <%= membership.tierName === 'Silver' ? 'is-current' : '' %>">
+            <div class="membership-tier-name">Silver</div>
+            <div class="membership-tier-range">500 – 1,499 pts</div>
+            <p class="membership-tier-copy">Priority access to new drops and selected promotions.</p>
+          </div>
+        </div>
+        <div class="col-md-3 col-6">
+          <div class="membership-tier-card <%= membership.tierName === 'Gold' ? 'is-current' : '' %>">
+            <div class="membership-tier-name">Gold</div>
+            <div class="membership-tier-range">1,500 – 2,999 pts</div>
+            <p class="membership-tier-copy">Enhanced perks with more generous point earning and offers.</p>
+          </div>
+        </div>
+        <div class="col-md-3 col-6">
+          <div class="membership-tier-card <%= membership.tierName === 'Platinum' ? 'is-current' : '' %>">
+            <div class="membership-tier-name">Platinum</div>
+            <div class="membership-tier-range">3,000+ pts</div>
+            <p class="membership-tier-copy">Top tier with the best perks and early access to rituals.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="membership-section-title">Redeeming points</h2>
+      <p class="mb-1">At checkout you can:</p>
+      <ul class="membership-list">
+        <li>Redeem <strong><%= membership.redeemCostFreeDelivery %> points</strong> to get <strong>free normal delivery</strong> on an order.</li>
+        <li>We’ll show your <strong>available points</strong> and any <strong>discounts applied</strong> during payment.</li>
+      </ul>
+      <p class="small text-muted">Note: Points are deducted immediately when you redeem them for free delivery on a completed order.</p>
+    </section>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

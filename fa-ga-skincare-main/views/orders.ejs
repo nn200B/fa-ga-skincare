@@ -1,0 +1,38 @@
+<%- include('partials/header', { user: (typeof user !== 'undefined' ? user : null), title: 'My Orders' }) %>
+
+<div class="container mt-5 mb-5 orders-wrapper">
+  <div class="orders-shell">
+    <header class="orders-header d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <div>
+        <p class="orders-kicker mb-1">Your past GlowAura purchases</p>
+        <h2 class="orders-title mb-0">My orders</h2>
+      </div>
+    </header>
+
+    <% if (!orders || orders.length === 0) { %>
+      <p class="mb-0">You have not placed any orders yet.</p>
+    <% } else { %>
+      <div class="orders-list">
+        <% orders.forEach(function(o){
+             const total = Number(o.total || (o.subtotal + o.deliveryCost));
+             const status = o.deliveryStatus || o.status || 'processing';
+        %>
+          <article class="order-card">
+            <a href="/orders/<%= o.id %>" class="order-main">
+              <div class="order-id-line">Order #<%= o.id %></div>
+              <p class="order-meta mb-1">Placed <%= new Date(o.createdAt).toLocaleString('en-SG',{dateStyle:'short', timeStyle:'short'}) %></p>
+              <p class="order-meta mb-0"><span class="order-label">Payment</span> <%= o.paymentMethod || 'card' %></p>
+            </a>
+            <div class="order-side text-end">
+              <div class="order-total">$<%= total.toFixed(2) %></div>
+              <div class="order-status-pill"><%= status %></div>
+              <a href="/orders/<%= o.id %>" class="btn btn-sm btn-outline-dark mt-2">View details</a>
+            </div>
+          </article>
+        <% }) %>
+      </div>
+    <% } %>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,2438 @@
+require('dotenv').config();
+const express = require('express');
+const mysql = require('mysql2');
+const session = require('express-session');
+const flash = require('connect-flash');
+const multer = require('multer');
+const app = express();
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const OrderController = require('./controllers/OrderController');
+const OrderModel = require('./models/Order');
+const NotificationModel = require('./models/Notification');
+const HelpCenterController = require('./controllers/HelpCenterController');
+const CategoryController = require('./controllers/CategoryController');
+const NotificationController = require('./controllers/NotificationController');
+const ProfileController = require('./controllers/ProfileController');
+const { addBusinessDays, estimateDeliveryDate } = require('./utils/orderUtils');
+const paypalSdk = require('@paypal/checkout-server-sdk');
+
+// PayPal environment setup
+const PAYPAL_ENV = (process.env.PAYPAL_ENV || 'sandbox').toLowerCase();
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
+let paypalEnvironment;
+if (PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET) {
+    paypalEnvironment = PAYPAL_ENV === 'live'
+        ? new paypalSdk.core.LiveEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+        : new paypalSdk.core.SandboxEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET);
+}
+const paypalClient = paypalEnvironment ? new paypalSdk.core.PayPalHttpClient(paypalEnvironment) : null;
+
+// Improve observability: catch top-level errors and log them so we can see why the process exits.
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION:', err && err.stack ? err.stack : String(err));
+    try { fs.appendFileSync(path.join(__dirname, 'data', 'server-error.log'), `UNCAUGHT: ${new Date().toISOString()}\n${String(err)}\n${err && err.stack ? err.stack + '\n' : ''}\n`); } catch(e){}
+    // don't exit immediately - allow logs to flush
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('UNHANDLED REJECTION:', reason);
+    try { fs.appendFileSync(path.join(__dirname, 'data', 'server-error.log'), `UNHANDLED_REJECTION: ${new Date().toISOString()}\n${String(reason)}\n\n`); } catch(e){}
+});
+
+console.log('Starting GlowAura Skincare App (pid=' + process.pid + ')');
+
+// Set up multer for file uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'public/images'); // Directory to save uploaded files
+    },
+    filename: (req, file, cb) => {
+        cb(null, file.originalname); 
+    }
+});
+
+const upload = multer({ storage: storage });
+
+let connection = mysql.createConnection({
+    host: 'localhost',
+    user: 'root',
+    password: 'Republic_C207',
+    database: 'c372_glowaura_skincare'
+});
+// If SKIP_DB is enabled we will later overwrite connection with a safe stub to avoid accidental DB calls crashing the app.
+
+// Keep SKIP_DB flag for products/carts, but orders will ignore it and use JSON store
+const SKIP_DB = String(process.env.SKIP_DB || '').toLowerCase() === 'true';
+if (!SKIP_DB) {
+    connection.connect((err) => {
+            if (err) {
+                    console.error('Error connecting to MySQL:', err);
+                    return;
+            }
+            console.log('Connected to MySQL database');
+
+            // Ensure carts table exists (stores JSON cart per user)
+            const createCartsTable = `
+                CREATE TABLE IF NOT EXISTS carts (
+                    userId INT PRIMARY KEY,
+                    cartData TEXT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            `;
+            connection.query(createCartsTable, (err) => {
+                if (err) console.error('Failed to ensure carts table:', err);
+            });
+            // Ensure categories table exists for admin-managed categories
+            const createCategoriesTable = `
+                CREATE TABLE IF NOT EXISTS categories (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(64) NOT NULL UNIQUE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            `;
+            connection.query(createCategoriesTable, (err) => {
+                if (err) console.error('Failed to ensure categories table:', err);
+            });
+    });
+} else {
+    console.log('SKIP_DB=true -> skipping MySQL connection and using in-memory storage');
+}
+// In-memory fallback data (used when SKIP_DB=true)
+const inMemory = {
+    categories: [
+        { id: 1, name: 'Cleansers' },
+        { id: 2, name: 'Serums' },
+        { id: 3, name: 'Moisturizers' },
+        { id: 4, name: 'Sun Care' },
+        { id: 5, name: 'Eye Care' },
+        { id: 6, name: 'Masks' }
+    ],
+    products: [
+        { id: 1, productName: 'Velvet Cloud Cream Cleanser', quantity: 80, price: 29.00, image: 'cleanser_velvet_cloud.png', category: 'Cleansers' },
+        { id: 2, productName: 'Green Tea Gel Cleanser', quantity: 100, price: 24.00, image: 'cleanser_green_tea.png', category: 'Cleansers' },
+        { id: 3, productName: 'Radiance Vitamin C Serum 15%', quantity: 60, price: 69.00, image: 'serum_vitc_15.png', category: 'Serums' },
+        { id: 4, productName: 'Midnight Repair Retinol Serum', quantity: 45, price: 79.00, image: 'serum_retinol_midnight.png', category: 'Serums' },
+        { id: 5, productName: 'HydraSilk Daily Moisturizer', quantity: 90, price: 58.00, image: 'moist_hydrasilk.png', category: 'Moisturizers' },
+        { id: 6, productName: 'Ceramide Barrier Cream Rich', quantity: 40, price: 72.00, image: 'moist_ceramide_rich.png', category: 'Moisturizers' },
+        { id: 7, productName: 'Weightless SPF50 Fluid', quantity: 120, price: 45.00, image: 'suncare_spf50_fluid.png', category: 'Sun Care' },
+        { id: 8, productName: 'Tinted Mineral SPF40', quantity: 70, price: 52.00, image: 'suncare_tinted_spf40.png', category: 'Sun Care' },
+        { id: 9, productName: 'Peptide Eye Renewal Cream', quantity: 55, price: 68.00, image: 'eye_peptide_renewal.png', category: 'Eye Care' },
+        { id: 10, productName: '24K Gold Illuminating Eye Masks (6 pairs)', quantity: 35, price: 54.00, image: 'eye_gold_masks.png', category: 'Eye Care' },
+        { id: 11, productName: 'Rose Quartz Overnight Sleeping Mask', quantity: 50, price: 64.00, image: 'mask_rose_quartz.png', category: 'Masks' },
+        { id: 12, productName: 'Pore-Refining Clay Detox Mask', quantity: 65, price: 39.00, image: 'mask_clay_detox.png', category: 'Masks' }
+    ],
+    nextProductId: 13,
+    nextCategoryId: 7,
+    orders: [],
+    nextOrderId: 1,
+    notifications: [],
+    nextNotificationId: 1,
+    refundRequests: [],
+    nextRefundId: 1,
+    addressChangeRequests: [],
+    nextAddressChangeId: 1,
+    users: [],
+    nextUserId: 1
+};
+
+// JSON-backed dev store (persist in SKIP_DB mode)
+const STORE_DIR = path.join(__dirname, 'data');
+const STORE_PATH = path.join(STORE_DIR, 'store.json');
+
+function persistStore(cb) {
+    try {
+        if (!fs.existsSync(STORE_DIR)) fs.mkdirSync(STORE_DIR, { recursive: true });
+        fs.writeFile(STORE_PATH, JSON.stringify(inMemory, null, 2), 'utf8', (err) => {
+            if (err) console.error('Failed to persist store.json:', err);
+            if (typeof cb === 'function') cb(err);
+        });
+    } catch (e) {
+        console.error('persistStore error:', e);
+        if (typeof cb === 'function') cb(e);
+    }
+}
+
+function loadStore() {
+    try {
+        if (fs.existsSync(STORE_PATH)) {
+            const raw = fs.readFileSync(STORE_PATH, 'utf8');
+            const parsed = JSON.parse(raw || '{}');
+            if (parsed && typeof parsed === 'object') {
+                inMemory.categories = parsed.categories || inMemory.categories;
+                inMemory.products = parsed.products || inMemory.products;
+                inMemory.nextProductId = parsed.nextProductId || inMemory.nextProductId;
+                inMemory.nextCategoryId = parsed.nextCategoryId || inMemory.nextCategoryId;
+                    inMemory.orders = parsed.orders || inMemory.orders;
+                    inMemory.nextOrderId = parsed.nextOrderId || inMemory.nextOrderId;
+                    inMemory.notifications = parsed.notifications || inMemory.notifications;
+                    inMemory.nextNotificationId = parsed.nextNotificationId || inMemory.nextNotificationId;
+                    inMemory.refundRequests = parsed.refundRequests || inMemory.refundRequests;
+                    inMemory.nextRefundId = parsed.nextRefundId || inMemory.nextRefundId;
+                    inMemory.addressChangeRequests = parsed.addressChangeRequests || inMemory.addressChangeRequests;
+                    inMemory.nextAddressChangeId = parsed.nextAddressChangeId || inMemory.nextAddressChangeId;
+            }
+        } else {
+            // create store file from defaults
+            persistStore(() => {});
+        }
+    } catch (e) {
+        console.error('Failed to load store.json, using defaults:', e);
+    }
+}
+
+// Load store on startup when SKIP_DB (call after loadStore is defined and inMemory exists)
+if (SKIP_DB) loadStore();
+
+// If SKIP_DB is enabled, replace the MySQL connection with a safe stub that won't throw
+if (SKIP_DB) {
+    connection = {
+        query: function(sql, params, cb) {
+            // normalize arguments
+            if (typeof params === 'function') { cb = params; params = []; }
+            // Very small heuristic: if the SQL starts with SELECT return empty array; otherwise return an OK-like object
+            const s = (sql || '').toString().trim().toUpperCase();
+            if (s.startsWith('SELECT')) return cb && cb(null, []);
+            // mimic result object for inserts/updates
+            return cb && cb(null, { insertId: 0, affectedRows: 0 });
+        }
+    };
+}
+
+// Helper abstraction so routes can use DB or in-memory fallback
+function getCategories(cb) {
+    if (SKIP_DB) return cb(null, inMemory.categories.slice());
+    connection.query('SELECT * FROM categories ORDER BY name', (err, rows) => {
+        if (err) return cb(err);
+        return cb(null, rows || []);
+    });
+}
+
+function addCategory(name, cb) {
+    if (!name) return cb(new Error('Missing name'));
+    if (SKIP_DB) {
+        // avoid duplicates by name
+        const existing = inMemory.categories.find(c => c.name.toLowerCase() === name.toLowerCase());
+        if (existing) return cb(null, existing);
+        const c = { id: inMemory.nextCategoryId++, name };
+        inMemory.categories.push(c);
+        // persist change
+        persistStore(() => cb(null, c));
+    }
+    connection.query('INSERT IGNORE INTO categories (name) VALUES (?)', [name], (err, result) => {
+        if (err) return cb(err);
+        // fetch the inserted/existing row
+        connection.query('SELECT * FROM categories WHERE name = ?', [name], (sErr, rows) => {
+            if (sErr) return cb(sErr);
+            return cb(null, rows && rows[0]);
+        });
+    });
+}
+
+function deleteCategoryById(id, cb) {
+    if (!id) return cb(new Error('Missing id'));
+    if (SKIP_DB) {
+        const idx = inMemory.categories.findIndex(c => String(c.id) === String(id));
+        if (idx === -1) return cb(null, { affectedRows: 0 });
+        inMemory.categories.splice(idx,1);
+        // persist change
+        persistStore(() => cb(null, { affectedRows: 1 }));
+    }
+    connection.query('DELETE FROM categories WHERE id = ?', [id], (err, result) => {
+        if (err) return cb(err);
+        return cb(null, result);
+    });
+}
+
+function getProducts(filter, cb) {
+    // filter: { category }
+    if (SKIP_DB) {
+        let items = inMemory.products.slice();
+        if (filter && filter.category) {
+            items = items.filter(p => (p.category || '').toLowerCase() === String(filter.category).toLowerCase());
+        }
+        return cb(null, items);
+    }
+    let sql = 'SELECT * FROM products';
+    const params = [];
+    if (filter && filter.category) {
+        sql += ' WHERE category = ?';
+        params.push(filter.category);
+    }
+    connection.query(sql, params, (err, rows) => {
+        if (err) return cb(err);
+        return cb(null, rows || []);
+    });
+}
+
+function addOrder(order, cb) {
+    // Simple in-memory / JSON-backed implementation for orders only
+    const o = Object.assign({}, order);
+    if (!inMemory.nextOrderId) inMemory.nextOrderId = 1;
+    if (!Array.isArray(inMemory.orders)) inMemory.orders = [];
+
+    o.id = inMemory.nextOrderId++;
+    o.createdAt = new Date().toISOString();
+    o.status = o.status || 'paid';
+    o.deliveryStatus = o.deliveryStatus || 'processing';
+
+    inMemory.orders.push(o);
+
+    persistStore(() => {
+        if (cb) cb(null, o);
+    });
+}
+
+// ---------------- Membership & Points Helpers ----------------
+
+// Tier thresholds (Option A)
+const MEMBERSHIP_TIERS = [
+    { name: 'Bronze', min: 0, max: 499 },
+    { name: 'Silver', min: 500, max: 1499 },
+    { name: 'Gold', min: 1500, max: 2999 },
+    { name: 'Platinum', min: 3000, max: Infinity }
+];
+
+const POINTS_PER_DOLLAR = 1;
+const REDEEM_POINTS_FREE_DELIVERY = 300;
+
+function calculateTier(points) {
+    const p = Number(points) || 0;
+    for (let i = 0; i < MEMBERSHIP_TIERS.length; i++) {
+        const t = MEMBERSHIP_TIERS[i];
+        if (p >= t.min && p <= t.max) return t;
+    }
+    return MEMBERSHIP_TIERS[0];
+}
+
+function buildMembershipSummary(user) {
+    const points = user && typeof user.points !== 'undefined' ? Number(user.points) || 0 : 0;
+    const tier = calculateTier(points);
+    const idx = MEMBERSHIP_TIERS.findIndex(t => t.name === tier.name);
+    const next = idx >= 0 && idx < MEMBERSHIP_TIERS.length - 1 ? MEMBERSHIP_TIERS[idx + 1] : null;
+    const currentMax = tier.max === Infinity ? null : tier.max;
+    const nextTierPoints = next ? next.min : null;
+    const pointsToNext = next ? Math.max(0, next.min - points) : 0;
+    let progressPercent = 100;
+    if (next && currentMax) {
+        const range = next.min - tier.min;
+        const within = Math.min(points, next.min) - tier.min;
+        progressPercent = Math.max(0, Math.min(100, Math.round((within / range) * 100)));
+    }
+    return {
+        points,
+        tierName: tier.name,
+        nextTierName: next ? next.name : null,
+        nextTierPoints,
+        pointsToNext,
+        currentTierMax: currentMax,
+        progressPercent,
+        redeemCostFreeDelivery: REDEEM_POINTS_FREE_DELIVERY
+    };
+}
+
+function getOrdersByUser(userId, cb) {
+    const list = (inMemory.orders || []).filter(o => String(o.userId) === String(userId)).slice().reverse();
+    if (cb) cb(null, list);
+}
+
+function getAllOrders(cb) {
+    const list = (inMemory.orders || []).slice().reverse();
+    if (cb) cb(null, list);
+}
+
+// Helpers for refund and address change requests (JSON-backed only)
+function addRefundRequest(data, cb) {
+    const r = {
+        id: inMemory.nextRefundId++,
+        userId: data.userId,
+        username: data.username,
+        orderId: data.orderId,
+        reason: data.reason,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+    };
+    inMemory.refundRequests.push(r);
+    persistStore(() => cb && cb(null, r));
+}
+
+function updateRefundStatus(id, status, cb) {
+    const r = (inMemory.refundRequests || []).find(x => String(x.id) === String(id));
+    if (!r) return cb && cb(new Error('Refund not found'));
+    r.status = status;
+    if (status === 'approved') {
+        r.refundStatus = 'refund accepted';
+    } else if (status === 'processing') {
+        r.refundStatus = 'processing refund';
+    } else if (status === 'completed') {
+        r.refundStatus = 'refund completed';
+    } else if (status === 'rejected') {
+        r.refundStatus = 'refund rejected';
+    }
+    r.updatedAt = new Date().toISOString();
+    persistStore(() => cb && cb(null, r));
+}
+
+function getRefunds(cb) {
+    const list = (inMemory.refundRequests || []).slice().reverse();
+    if (cb) cb(null, list);
+}
+
+function addAddressChangeRequest(data, cb) {
+    const r = {
+        id: inMemory.nextAddressChangeId++,
+        userId: data.userId,
+        username: data.username,
+        orderId: data.orderId,
+        newAddress: data.newAddress,
+        reason: data.reason,
+        status: 'submitted',
+        createdAt: new Date().toISOString()
+    };
+    inMemory.addressChangeRequests.push(r);
+    persistStore(() => cb && cb(null, r));
+}
+
+function getAddressChangeRequests(cb) {
+    const list = (inMemory.addressChangeRequests || []).slice().reverse();
+    if (cb) cb(null, list);
+}
+
+function updateAddressChangeStatus(id, status, cb) {
+    const r = (inMemory.addressChangeRequests || []).find(x => String(x.id) === String(id));
+    if (!r) return cb && cb(new Error('Address change not found'));
+    r.status = status;
+    r.updatedAt = new Date().toISOString();
+    persistStore(() => cb && cb(null, r));
+}
+
+// Notifications
+function addNotification(data, cb) {
+    const n = {
+        id: inMemory.nextNotificationId++,
+        userId: data.userId || null, // null or 0 for admin/global notifications
+        role: data.role || null,     // 'admin' or 'user' (optional)
+        type: data.type || 'info',   // e.g. 'order', 'refund', 'address', etc.
+        message: data.message || '',
+        link: data.link || null,
+        createdAt: new Date().toISOString(),
+        read: false
+    };
+    inMemory.notifications.push(n);
+    persistStore(() => cb && cb(null, n));
+}
+
+function getNotificationsForUser(user, cb) {
+    const uid = getUserIdFromSessionUser(user);
+    const role = user && user.role;
+    const list = (inMemory.notifications || []).filter(n => {
+        // Admin notifications: role === 'admin'
+        if (role === 'admin') {
+            return n.role === 'admin';
+        }
+        // User notifications: match userId or global user notifications
+        return n.role === 'user' && (n.userId == null || String(n.userId) === String(uid));
+    }).slice().reverse();
+    if (cb) cb(null, list);
+}
+
+function markNotificationRead(id, cb) {
+    const n = (inMemory.notifications || []).find(x => String(x.id) === String(id));
+    if (!n) return cb && cb(new Error('Notification not found'));
+    n.read = true;
+    n.readAt = new Date().toISOString();
+    persistStore(() => cb && cb(null, n));
+}
+
+function markNotificationUnread(id, cb) {
+    const n = (inMemory.notifications || []).find(x => String(x.id) === String(id));
+    if (!n) return cb && cb(new Error('Notification not found'));
+    n.read = false;
+    delete n.readAt;
+    persistStore(() => cb && cb(null, n));
+}
+
+function updateOrderStatus(orderId, newStatus, cb) {
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(orderId));
+    if (!o) {
+        if (cb) cb(new Error('Order not found'));
+        return;
+    }
+    o.deliveryStatus = newStatus;
+    if (!o.history) o.history = [];
+    o.history.push({ status: newStatus, at: new Date().toISOString() });
+    persistStore(() => {
+        if (cb) cb(null, o);
+    });
+}
+
+// Helper to get the current logged-in user id from session user
+function getUserIdFromSessionUser(user) {
+    if (!user) return null;
+    if (user.id) return user.id;
+    if (user.userId) return user.userId;
+    return null;
+}
+
+function addProduct(data, cb) {
+    // data: { productName, quantity, price, image, category }
+    if (SKIP_DB) {
+        const p = {
+            id: inMemory.nextProductId++,
+            productName: data.productName || 'Unnamed',
+            quantity: Number(data.quantity) || 0,
+            price: Number(data.price) || 0,
+            image: data.image || null,
+            category: data.category || null
+        };
+        inMemory.products.push(p);
+        // persist change
+        persistStore(() => cb(null, p));
+    }
+    const sql = 'INSERT INTO products (productName, quantity, price, image, category) VALUES (?, ?, ?, ?, ?)';
+    connection.query(sql, [data.productName, data.quantity, data.price, data.image, data.category], (err, result) => {
+        if (err) return cb(err);
+        // fetch inserted row
+        connection.query('SELECT * FROM products WHERE id = ?', [result.insertId], (sErr, rows) => {
+            if (sErr) return cb(sErr);
+            return cb(null, rows && rows[0]);
+        });
+    });
+}
+
+function getProductById(id, cb) {
+    if (SKIP_DB) {
+        const p = inMemory.products.find(x => String(x.id) === String(id));
+        return cb(null, p ? [p] : []);
+    }
+    connection.query('SELECT * FROM products WHERE id = ?', [id], (err, rows) => {
+        if (err) return cb(err);
+        return cb(null, rows || []);
+    });
+}
+
+// Set up view engine
+app.set('view engine', 'ejs');
+//  enable static files
+app.use(express.static('public'));
+// enable form processing
+app.use(express.urlencoded({
+    extended: false
+}));
+
+// make sure JSON body parsing is enabled for future endpoints
+app.use(express.json());
+
+//TO DO: Insert code for Session Middleware below 
+app.use(session({
+    secret: 'secret',
+    resave: false,
+    saveUninitialized: true,
+    // Session expires after 1 week of inactivity
+    cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 } 
+}));
+
+app.use(flash());
+
+// Quick test-login route (always available) placed early so it's reachable even if other routing changes happen.
+app.get('/_quick_login', (req, res) => {
+    // Create an admin session quickly for testing without DB.
+    req.session.user = { id: 1, username: 'dev_admin', role: 'admin' };
+    req.session.cart = [];
+    // Small confirmation page with a link to inventory
+    res.send('<html><body><p>Test admin session created. <a href="/inventory">Go to inventory</a></p></body></html>');
+});
+
+// expose cart count to all views via res.locals
+app.use((req, res, next) => {
+    try {
+        const cart = req.session && Array.isArray(req.session.cart) ? req.session.cart : [];
+        // total quantity
+        const count = cart.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+        res.locals.cartCount = count;
+    } catch (e) {
+        res.locals.cartCount = 0;
+    }
+    // Expose unread/new orders count for admin badge
+    try {
+        if (req.session && req.session.user && req.session.user.role === 'admin') {
+            res.locals.newOrdersCount = (inMemory.orders || []).filter(o => o.new).length;
+            // Admin notification badge
+            res.locals.notificationCount = (inMemory.notifications || []).filter(n => n.role === 'admin' && !n.read).length;
+        } else {
+            res.locals.newOrdersCount = 0;
+            // User notification badge
+            const uid = getUserIdFromSessionUser(req.session && req.session.user);
+            res.locals.notificationCount = (inMemory.notifications || []).filter(n => n.role === 'user' && !n.read && (n.userId == null || String(n.userId) === String(uid))).length;
+        }
+    } catch (e) { res.locals.newOrdersCount = 0; }
+    next();
+});
+
+// Prevent caching of authenticated pages so browser 'back' won't show stale protected pages
+app.use((req, res, next) => {
+    try {
+        // Only set no-cache for HTML responses and when a user was/has been logged in for the session
+        // This reduces impact on static assets while protecting sensitive pages from being shown after logout.
+        const acceptsHtml = (req.get('Accept') || '').includes('text/html') || req.accepts('html');
+        // Apply no-cache headers for HTML responses so browsers will re-request
+        // the page when using Back/Forward, ensuring the server can enforce
+        // authentication/redirects after logout.
+        if (acceptsHtml) {
+            res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.set('Pragma', 'no-cache');
+            res.set('Expires', '0');
+            res.set('Surrogate-Control', 'no-store');
+        }
+    } catch (e) {
+        // noop
+    }
+    next();
+});
+
+// Middleware to check if user is logged in
+const checkAuthenticated = (req, res, next) => {
+    if (req.session.user) {
+        return next();
+    } else {
+        // If this is an AJAX/fetch request, return JSON 401 instead of redirecting HTML
+        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+        if (acceptsJson) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        req.flash('error', 'Please log in to view this resource');
+        return res.redirect('/login');
+    }
+};
+
+// Middleware to check if user is admin
+const checkAdmin = (req, res, next) => {
+    if (req.session.user.role === 'admin') {
+        return next();
+    } else {
+        req.flash('error', 'Access denied');
+        res.redirect('/shopping');
+    }
+};
+
+// Middleware to block admin users from user-only features (cart)
+const checkNotAdmin = (req, res, next) => {
+    if (req.session && req.session.user && req.session.user.role === 'admin') {
+        // If the client expects JSON (AJAX/fetch), return 403 JSON. Otherwise redirect for normal browsers.
+        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+        if (acceptsJson) {
+            return res.status(403).json({ error: 'Admins do not use the cart.' });
+        }
+        req.flash('error', 'Admins do not use the cart.');
+        return res.redirect('/inventory');
+    }
+    return next();
+};
+
+    // Membership page route (requires auth, user-only)
+    app.get('/membership', checkAuthenticated, checkNotAdmin, (req, res) => {
+        const membership = buildMembershipSummary(req.session.user || {});
+        res.render('membership', { user: req.session.user, membership });
+    });
+
+// Helper: load full user row by id
+function getUserById(id, cb){
+    if (!id) return cb(new Error('Missing user id'));
+    connection.query('SELECT * FROM users WHERE id = ?', [id], (err, rows) => {
+        if (err) return cb(err);
+        cb(null, rows && rows[0]);
+    });
+}
+
+// Helper: get all users (for admin user management)
+function getAllUsers(cb){
+    connection.query('SELECT id, username, email, role, points FROM users ORDER BY id ASC', (err, rows) => {
+        if (err) return cb(err);
+        const list = (rows || []).map(r => {
+            const u = Object.assign({}, r);
+            u.membership = buildMembershipSummary({ points: u.points || 0 });
+            return u;
+        });
+        cb(null, list);
+    });
+}
+
+// Helper: update basic profile fields
+function updateUserProfile(id, data, cb){
+    const { username, email, address, contact } = data;
+    connection.query(
+        'UPDATE users SET username = ?, email = ?, address = ?, contact = ? WHERE id = ?',
+        [username, email, address, contact, id],
+        (err, result) => cb(err, result)
+    );
+}
+
+// Helper: update password using SHA1 like existing code
+function updateUserPassword(id, newPassword, cb){
+    connection.query(
+        'UPDATE users SET password = SHA1(?) WHERE id = ?',
+        [newPassword, id],
+        (err, result) => cb(err, result)
+    );
+}
+
+// Middleware for form validation
+const validateRegistration = (req, res, next) => {
+    const { username, email, password, address, contact, role } = req.body;
+
+    if (!username || !email || !password || !address || !contact || !role) {
+        return res.status(400).send('All fields are required.');
+    }
+    
+    if (password.length < 6) {
+        req.flash('error', 'Password should be at least 6 or more characters long');
+        req.flash('formData', req.body);
+        return res.redirect('/register');
+    }
+    next();
+};
+
+// Define routes
+app.get('/',  (req, res) => {
+    res.render('index', {user: req.session.user} );
+});
+
+app.get('/inventory', checkAuthenticated, checkAdmin, (req, res) => {
+        // Fetch products and categories (DB or in-memory)
+        getProducts({}, (pErr, products) => {
+            if (pErr) {
+                console.error('Failed to load products for inventory:', pErr);
+                return res.status(500).send('Database error');
+            }
+            getCategories((cErr, cats) => {
+                const categories = (cErr || !cats) ? [] : (cats.map ? cats.map(r => r.name || r) : cats);
+                res.render('inventory', { products: products, user: req.session.user, categories });
+            });
+        });
+});
+
+// Admin user management
+app.get('/admin/users', checkAuthenticated, checkAdmin, (req, res) => {
+    getAllUsers((err, users) => {
+        if (err) {
+            console.error('Failed to load users for admin:', err);
+            req.flash('error', 'Could not load users.');
+            return res.redirect('/inventory');
+        }
+        const errors = req.flash('error');
+        const success = req.flash('success');
+        res.render('admin_users', { user: req.session.user, users: users || [], errors, success });
+    });
+});
+
+app.post('/admin/users/:id/delete', checkAuthenticated, checkAdmin, (req, res) => {
+    const id = req.params.id;
+    if (!id) {
+        req.flash('error', 'Missing user id.');
+        return res.redirect('/admin/users');
+    }
+    // prevent deleting admins
+    connection.query('SELECT role FROM users WHERE id = ?', [id], (err, rows) => {
+        if (err) {
+            console.error('Failed to check user role before delete:', err);
+            req.flash('error', 'Could not delete user.');
+            return res.redirect('/admin/users');
+        }
+        const row = rows && rows[0];
+        if (!row) {
+            req.flash('error', 'User not found.');
+            return res.redirect('/admin/users');
+        }
+        if (row.role === 'admin') {
+            req.flash('error', 'Cannot delete admin accounts.');
+            return res.redirect('/admin/users');
+        }
+        connection.query('DELETE FROM users WHERE id = ?', [id], (delErr) => {
+            if (delErr) {
+                console.error('Failed to delete user:', delErr);
+                req.flash('error', 'Could not delete user.');
+            } else {
+                req.flash('success', 'User deleted.');
+            }
+            return res.redirect('/admin/users');
+        });
+    });
+});
+
+app.get('/register', (req, res) => {
+    res.render('register', { messages: req.flash('error'), formData: req.flash('formData')[0] });
+});
+
+app.post('/register', validateRegistration, (req, res) => {
+
+    const { username, email, password, address, contact, role } = req.body;
+
+    const sql = 'INSERT INTO users (username, email, password, address, contact, role) VALUES (?, ?, SHA1(?), ?, ?, ?)';
+    connection.query(sql, [username, email, password, address, contact, role], (err, result) => {
+        if (err) {
+            console.error('DB error during registration:', err);
+            req.flash('error', 'Registration failed. Try a different email or contact admin.');
+            return res.redirect('/register');
+        }
+        console.log(result);
+        req.flash('success', 'Registration successful! Please log in.');
+        res.redirect('/login');
+    });
+});
+
+app.get('/login', (req, res) => {
+    res.render('login', { messages: req.flash('success'), errors: req.flash('error') });
+});
+
+app.post('/login', (req, res) => {
+    const { email, password } = req.body;
+
+    // Validate email and password
+    if (!email || !password) {
+        req.flash('error', 'All fields are required.');
+        return res.redirect('/login');
+    }
+
+    const sql = 'SELECT * FROM users WHERE email = ? AND password = SHA1(?)';
+    connection.query(sql, [email, password], (err, results) => {
+        if (err) {
+            console.error('DB error during login:', err);
+            req.flash('error', 'Login failed due to server error.');
+            return res.redirect('/login');
+        }
+
+        if (results.length > 0) {
+            // Successful login
+            req.session.user = results[0];
+
+            // load persisted cart for this user
+            const uid = getUserIdFromSessionUser(req.session.user);
+            loadCartFromDB(uid, (err, savedCart) => {
+              if (err) console.error('Failed to load saved cart:', err);
+              // If session already has cart items (e.g., guest added items), merge them with savedCart:
+              const sessionCart = req.session.cart || [];
+              if (sessionCart.length === 0) {
+                req.session.cart = savedCart || [];
+              } else {
+                // merge: keep quantities summed by productId
+                const map = {};
+                (savedCart || []).forEach(i => { map[String(i.productId || i.id)] = { ...i }; });
+                sessionCart.forEach(i => {
+                  const key = String(i.productId || i.id);
+                  if (map[key]) {
+                    map[key].quantity = (map[key].quantity || 0) + (i.quantity || 0);
+                  } else {
+                    map[key] = { ...i };
+                  }
+                });
+                req.session.cart = Object.values(map).filter(item => item.productId && item.quantity > 0);  // Filter invalid items
+              }
+
+              // persist merged session cart back to DB
+              const finalUid = uid;
+              saveCartToDB(finalUid, req.session.cart, (saveErr) => {
+                if (saveErr) console.error('Failed to save merged cart:', saveErr);
+                req.flash('success', 'Login successful!');
+                if(req.session.user.role == 'user')
+                    res.redirect('/shopping');
+                else
+                    res.redirect('/inventory');
+              });
+            });
+        } else {
+            // Invalid credentials
+            req.flash('error', 'Invalid email or password.');
+            res.redirect('/login');
+        }
+    });
+});
+
+// Profile page (both user and admin)
+app.get('/profile', checkAuthenticated, (req, res) => {
+    ProfileController.renderProfile(req, res, getUserById);
+});
+
+// Update profile details
+app.post('/profile', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { username, email, address, contact } = req.body;
+    if (!username || !email) {
+        req.flash('error', 'Name and email are required.');
+        return res.redirect('/profile');
+    }
+    updateUserProfile(uid, { username, email, address, contact }, (err) => {
+        if (err) {
+            console.error('Failed to update profile:', err);
+            req.flash('error', 'Could not update profile.');
+            return res.redirect('/profile');
+        }
+        // keep session in sync for navbar greeting etc.
+        if (req.session.user) {
+            req.session.user.username = username;
+            req.session.user.email = email;
+            req.session.user.address = address;
+            req.session.user.contact = contact;
+        }
+        req.flash('success', 'Profile updated successfully.');
+        res.redirect('/profile');
+    });
+});
+
+// Step 1: request OTP for password change
+app.post('/profile/password/request-otp', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { currentPassword, newPassword, newPassword2 } = req.body;
+    if (!currentPassword || !newPassword || !newPassword2) {
+        req.flash('error', 'Please fill in all password fields.');
+        return res.redirect('/profile');
+    }
+    if (newPassword !== newPassword2) {
+        req.flash('error', 'New passwords do not match.');
+        return res.redirect('/profile');
+    }
+    if (newPassword.length < 6) {
+        req.flash('error', 'New password should be at least 6 characters.');
+        return res.redirect('/profile');
+    }
+    // verify current password
+    connection.query('SELECT * FROM users WHERE id = ? AND password = SHA1(?)', [uid, currentPassword], (err, rows) => {
+        if (err) {
+            console.error('Error verifying current password:', err);
+            req.flash('error', 'Could not verify current password.');
+            return res.redirect('/profile');
+        }
+        if (!rows || rows.length === 0) {
+            req.flash('error', 'Current password is incorrect.');
+            return res.redirect('/profile');
+        }
+        // generate OTP and store in session with short expiry
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        req.session.passwordOtp = otp;
+        req.session.passwordOtpExpires = Date.now() + 5 * 60 * 1000; // 5 minutes
+        req.session.passwordNew = newPassword;
+        req.session.passwordStep = 'otp';
+        // For this assignment, show OTP on screen as a hint (simulated SMS/email)
+        req.session.passwordOtpHint = otp;
+        req.flash('success', 'We have generated a one-time code. Enter it below to confirm your new password.');
+        res.redirect('/profile');
+    });
+});
+
+// Step 2: confirm OTP and change password
+app.post('/profile/password/confirm', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const { otp } = req.body;
+    const storedOtp = req.session.passwordOtp;
+    const expiresAt = req.session.passwordOtpExpires;
+    const newPassword = req.session.passwordNew;
+
+    if (!storedOtp || !expiresAt || !newPassword) {
+        req.flash('error', 'No active password change request. Please try again.');
+        return res.redirect('/profile');
+    }
+    if (Date.now() > expiresAt) {
+        req.flash('error', 'The one-time code has expired. Please start again.');
+        req.session.passwordOtp = null;
+        req.session.passwordOtpExpires = null;
+        req.session.passwordNew = null;
+        req.session.passwordStep = 'start';
+        req.session.passwordOtpHint = null;
+        return res.redirect('/profile');
+    }
+    if (!otp || otp.trim() !== String(storedOtp)) {
+        req.flash('error', 'The one-time code is incorrect.');
+        return res.redirect('/profile');
+    }
+
+    updateUserPassword(uid, newPassword, (err) => {
+        if (err) {
+            console.error('Failed to update password:', err);
+            req.flash('error', 'Could not update password.');
+            return res.redirect('/profile');
+        }
+        // clear sensitive session fields
+        req.session.passwordOtp = null;
+        req.session.passwordOtpExpires = null;
+        req.session.passwordNew = null;
+        req.session.passwordStep = 'start';
+        req.session.passwordOtpHint = null;
+        req.flash('success', 'Your password has been updated.');
+        res.redirect('/profile');
+    });
+});
+
+// Simple server-side pagination for shopping page
+const SHOP_PAGE_SIZE = 6; // products per page
+
+app.get('/shopping', checkAuthenticated, checkNotAdmin, (req, res) => {
+    // Optional category filtering from query string.
+    const rawCategory = (req.query.category || '').trim();
+    const category = (rawCategory && String(rawCategory).toLowerCase() !== 'all') ? rawCategory : '';
+
+    // Page number (1-based)
+    let page = parseInt(req.query.page || '1', 10);
+    if (isNaN(page) || page < 1) page = 1;
+
+    // Load categories and products (DB or in-memory)
+    getCategories((cErr, cats) => {
+        const categories = (cErr || !cats) ? [] : (cats.map ? cats.map(r => r.name || r) : cats);
+        getProducts({ category }, (pErr, products) => {
+            if (pErr) {
+                console.error('Failed to load products for shopping:', pErr);
+                return res.status(500).send('Database error');
+            }
+
+            const totalItems = products.length;
+            const totalPages = Math.max(Math.ceil(totalItems / SHOP_PAGE_SIZE) || 1, 1);
+            const currentPage = Math.min(page, totalPages);
+            const startIdx = (currentPage - 1) * SHOP_PAGE_SIZE;
+            const endIdx = startIdx + SHOP_PAGE_SIZE;
+            const pageProducts = products.slice(startIdx, endIdx);
+
+            res.render('shopping', {
+                user: req.session.user,
+                products: pageProducts,
+                category: category,
+                categories,
+                page: currentPage,
+                totalPages,
+                totalItems
+            });
+        });
+    });
+});
+
+// Allow guests to add to cart (no login required). Admins are still blocked.
+app.post('/add-to-cart/:id', checkNotAdmin, (req, res) => {
+    const productId = parseInt(req.params.id);
+    const quantity = parseInt(req.body.quantity) || 1;
+
+    // Debug logging to help trace AJAX failures
+    try {
+        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+        console.log('DEBUG POST /add-to-cart called', { productId, acceptsJson, cookiePresent: !!req.headers.cookie, sessionUser: getUserIdFromSessionUser(req.session && req.session.user) });
+    } catch (e) {
+        console.log('DEBUG POST /add-to-cart logging failed', e && e.message);
+    }
+    connection.query('SELECT * FROM products WHERE id = ?', [productId], (error, results) => {
+        if (error) {
+            console.error('DB error fetching product by id:', error);
+            return res.status(500).send('Database error');
+        }
+
+        if (results.length > 0) {
+            const product = results[0];
+
+            // Ensure session cart exists
+            if (!req.session.cart) {
+                req.session.cart = [];
+            }
+
+            // Current quantity in cart for this product
+            const existingItem = req.session.cart.find(item => item.productId === productId);
+            const currentQty = existingItem ? (parseInt(existingItem.quantity) || 0) : 0;
+            const requestedTotal = currentQty + quantity;
+
+            // If requested quantity exceeds available stock, block and inform user
+            if (requestedTotal > product.quantity) {
+                const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+                const message = `Not enough stock available. Only ${product.quantity} left.`;
+                if (acceptsJson) {
+                    return res.status(400).json({ success: false, error: message, available: product.quantity, inCart: currentQty });
+                }
+                req.flash('error', message);
+                return res.redirect('/shopping');
+            }
+
+            // Otherwise, add/update item in cart
+            if (existingItem) {
+                existingItem.quantity = requestedTotal;
+            } else {
+                req.session.cart.push({
+                    productId: productId,
+                    productName: product.productName,
+                    price: product.price,
+                    quantity: quantity,
+                    image: product.image
+                });
+            }
+
+                        // save session cart to DB for logged-in user
+                        const uid = getUserIdFromSessionUser(req.session.user);
+                        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+                        const afterSave = () => {
+                            const cartQuantity = (req.session.cart || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+                            if (acceptsJson) {
+                                return res.json({ success: true, cartLength: req.session.cart.length, cartQuantity });
+                            }
+                            // For normal form posts, stay on the current page instead of redirecting to /cart.
+                            // Redirect back to the referrer (usually /shopping or product page); fallback to /shopping.
+                            const referer = req.get('referer') || '/shopping';
+                            return res.redirect(referer);
+                        };
+
+                        if (uid) {
+                            saveCartToDB(uid, req.session.cart, (err) => {
+                                if (err) console.error('Failed to save cart after add:', err);
+                                return afterSave();
+                            });
+                        } else {
+                            return afterSave();
+                        }
+        } else {
+            res.status(404).send("Product not found");
+        }
+    });
+});
+
+app.get('/cart', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const cart = req.session.cart || [];
+    res.render('cart', { cart, user: req.session.user });
+});
+
+// Update quantity for a cart item
+app.post('/cart/update', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const pid = req.body.productId || req.body.pid;
+    let qty = parseInt(req.body.quantity, 10);
+    if (!pid || isNaN(qty)) {
+        req.flash('error', 'Invalid quantity update.');
+        return res.redirect('/cart');
+    }
+    if (qty < 1) qty = 1;
+
+    if (!Array.isArray(req.session.cart)) req.session.cart = [];
+    const item = req.session.cart.find(it => String(it.productId) === String(pid));
+    if (!item) {
+        req.flash('error', 'Item not found in cart.');
+        return res.redirect('/cart');
+    }
+
+    item.quantity = qty;
+
+    // persist updated cart to DB for logged-in user
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const finish = () => {
+        req.flash('success', 'Cart updated.');
+        res.redirect('/cart');
+    };
+    if (uid) {
+        saveCartToDB(uid, req.session.cart, (err) => {
+            if (err) console.error('Failed to save cart after quantity update:', err);
+            finish();
+        });
+    } else {
+        finish();
+    }
+});
+
+// Handle selection of items from cart for checkout
+app.post('/cart/selection', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const cart = req.session.cart || [];
+    let selected = req.body.selected || [];
+    if (!Array.isArray(selected)) selected = [selected];
+    const selectedIds = new Set(selected.map(x => String(x)));
+
+    const filtered = cart.filter(it => selectedIds.has(String(it.productId)));
+    if (!filtered.length) {
+        req.flash('error', 'Please select item(s) to check out.');
+        return res.redirect('/cart');
+    }
+
+    // Store selected items in session for checkout flow
+    req.session.selectedCartItems = filtered;
+    return res.redirect('/delivery-details');
+});
+
+// Clear entire shopping cart
+app.post('/cart/clear', checkAuthenticated, checkNotAdmin, (req, res) => {
+    req.session.cart = [];
+    req.session.selectedCartItems = [];
+    const uid = getUserIdFromSessionUser(req.session.user);
+    if (uid) {
+        saveCartToDB(uid, req.session.cart, (err) => {
+            if (err) console.error('Failed to save cart on clear:', err);
+            req.flash('success', 'Cart cleared.');
+            return res.redirect('/cart');
+        });
+    } else {
+        req.flash('success', 'Cart cleared.');
+        return res.redirect('/cart');
+    }
+});
+
+// Helper to remove item and persist cart
+function removeItemAndSave(req, res, productId) {
+    if (!req.session.cart || !Array.isArray(req.session.cart)) req.session.cart = [];
+    req.session.cart = req.session.cart.filter(item => String(item.productId) !== String(productId));
+    const uid = getUserIdFromSessionUser(req.session.user);
+    if (uid) {
+        saveCartToDB(uid, req.session.cart, (err) => {
+            if (err) console.error('Failed to save cart after delete:', err);
+            return res.redirect('/cart');
+        });
+    } else {
+        return res.redirect('/cart');
+    }
+}
+
+// POST via form body: /cart/delete
+app.post('/cart/delete', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const productId = req.body.productId || req.body.pid;
+    if (!productId) {
+        console.warn('No productId provided in body, redirecting to /cart');
+        return res.redirect('/cart');
+    }
+    removeItemAndSave(req, res, productId);
+});
+
+// POST via URL param: /cart/delete/:productId
+app.post('/cart/delete/:productId', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const productId = req.params.productId;
+    if (!productId) return res.redirect('/cart');
+    removeItemAndSave(req, res, productId);
+});
+
+app.get('/logout', (req, res) => {
+    // save cart for logged in user before destroying session
+    const uid = req.session ? getUserIdFromSessionUser(req.session.user) : null;
+    const cartToSave = (req.session && req.session.cart) ? req.session.cart : [];
+    if (uid) {
+      saveCartToDB(uid, cartToSave, (err) => {
+        if (err) console.error('Failed to save cart on logout:', err);
+                // Destroy session and clear cookie, redirect to login
+                req.session.destroy((destroyErr) => {
+                    try { res.clearCookie('connect.sid'); } catch(e){}
+                    return res.redirect('/login');
+                });
+      });
+    } else {
+            req.session.destroy((destroyErr) => {
+                try { res.clearCookie('connect.sid'); } catch(e){}
+                return res.redirect('/login');
+            });
+    }
+});
+
+app.get('/product/:id', checkAuthenticated, (req, res) => {
+  // Extract the product ID from the request parameters
+  const productId = req.params.id;
+
+  // Fetch data from MySQL based on the product ID
+  connection.query('SELECT * FROM products WHERE id = ?', [productId], (error, results) => {
+      if (error) {
+          console.error('DB error fetching product by id:', error);
+          return res.status(500).send('Database error');
+      }
+
+      // Check if any product with the given ID was found
+      if (results.length > 0) {
+          // Render HTML page with the product data
+          res.render('product', { product: results[0], user: req.session.user  });
+      } else {
+          // If no product with the given ID was found, render a 404 page or handle it accordingly
+          res.status(404).send('Product not found');
+      }
+  });
+});
+
+app.get('/addProduct', checkAuthenticated, checkAdmin, (req, res) => {
+    // fetch categories for select dropdown (DB or in-memory)
+    getCategories((err, rows) => {
+        const categories = (err || !rows) ? [] : (rows.map ? rows.map(r => r.name || r) : rows);
+        res.render('addProduct', { user: req.session.user, categories });
+    });
+});
+
+app.post('/addProduct', checkAuthenticated, checkAdmin, upload.single('image'),  (req, res) => {  // Fixed: Added missing auth middleware
+    // Extract product data from the request body
+    let { name, quantity, price, category, newCategory } = req.body;
+    // If admin provided a newCategory, ensure it's present
+    const ensureCategoryThenAddProduct = (cb) => {
+        if (newCategory && newCategory.trim()) {
+            const newName = newCategory.trim();
+            addCategory(newName, (err, row) => {
+                if (err) console.error('Failed to insert new category:', err);
+                category = newName;
+                return cb();
+            });
+        } else {
+            return cb();
+        }
+    };
+
+    let image = null;
+    if (req.file) image = req.file.filename;
+
+    ensureCategoryThenAddProduct(() => {
+        // Use helper addProduct which handles DB or in-memory
+        addProduct({ productName: name, quantity: quantity, price: price, image: image, category: category }, (err, created) => {
+            if (err) {
+                console.error('Error adding product:', err);
+                return res.status(500).send('Error adding product');
+            }
+            return res.redirect('/inventory');
+        });
+    });
+});
+
+app.get('/updateProduct/:id',checkAuthenticated, checkAdmin, (req,res) => {
+    const productId = req.params.id;
+    const sql = 'SELECT * FROM products WHERE id = ?';
+    // Fetch data from DB or in-memory
+    getProductById(productId, (err, results) => {
+        if (err) {
+            console.error('DB error fetching product for update:', err);
+            return res.status(500).send('Database error');
+        }
+        if (!results || results.length === 0) return res.status(404).send('Product not found');
+        getCategories((cErr, rows) => {
+            const categories = (cErr || !rows) ? [] : (rows.map ? rows.map(r => r.name || r) : rows);
+            res.render('updateProduct', { product: results[0], user: req.session.user, categories });
+        });
+    });
+});
+
+app.post('/updateProduct/:id', checkAuthenticated, checkAdmin, upload.single('image'), (req, res) => {  // Fixed: Added missing auth middleware
+        const productId = req.params.id;
+        // Extract product data from the request body
+        let { name, quantity, price, category, newCategory } = req.body;
+        // If admin provided a newCategory, insert it into categories table (ignore errors)
+        if (newCategory && newCategory.trim()) {
+            const newName = newCategory.trim();
+            addCategory(newName, (err) => {
+                if (err) console.error('Failed to insert new category:', err);
+            });
+            category = newName;
+        }
+        let image  = req.body.currentImage; //retrieve current image filename
+        if (req.file) { //if new image is uploaded
+                image = req.file.filename; // set image to be new image filename
+        }
+
+        // If running with SKIP_DB, update in-memory product
+        if (SKIP_DB) {
+            const prod = inMemory.products.find(p => String(p.id) === String(productId));
+            if (!prod) return res.status(404).send('Product not found');
+            prod.productName = name;
+            prod.quantity = Number(quantity) || prod.quantity;
+            prod.price = Number(price) || prod.price;
+            prod.image = image || prod.image;
+            prod.category = category || prod.category;
+            // persist change then redirect
+            return persistStore(() => res.redirect('/inventory'));
+        }
+
+        const updateWithCategory = () => {
+            const sql = 'UPDATE products SET productName = ? , quantity = ?, price = ?, image = ?, category = ? WHERE id = ?';
+            connection.query(sql, [name, quantity, price, image, category || null, productId], updateCallback);
+        };
+
+        const updateWithoutCategory = () => {
+            const sql = 'UPDATE products SET productName = ? , quantity = ?, price = ?, image = ? WHERE id = ?';
+            connection.query(sql, [name, quantity, price, image, productId], updateCallback);
+        };
+
+        const updateCallback = (error, results) => {
+            if (error) {
+                console.error('Error updating product:', error);
+                if (error.code === 'ER_BAD_FIELD_ERROR') {
+                    console.log('Category column missing; retrying update without category');
+                    return updateWithoutCategory();
+                }
+                return res.status(500).send('Error updating product');
+            }
+            return res.redirect('/inventory');
+        };
+
+        if (typeof category !== 'undefined') {
+            updateWithCategory();
+        } else {
+            updateWithoutCategory();
+        }
+});
+
+// Categories routes
+// User view: /categories_user (read-only, just to select category and shop)
+app.get('/categories_user', checkAuthenticated, (req, res) => {
+    if (req.session.user && req.session.user.role === 'admin') {
+        return res.redirect('/admin/categories');
+    }
+    getCategories((err, rows) => {
+        if (err) {
+            console.error('Failed to load categories:', err);
+            return res.status(500).send('Failed to load categories');
+        }
+        return CategoryController.renderUserCategories(req, res, rows || []);
+    });
+});
+
+// Admin view: list categories with products under each
+app.get('/admin/categories', checkAuthenticated, checkAdmin, (req, res) => {
+    getCategories((cErr, catRows) => {
+        if (cErr) {
+            console.error('Failed to load categories for admin:', cErr);
+            req.flash('error', 'Could not load categories');
+            return res.redirect('/inventory');
+        }
+        const categories = catRows || [];
+        getProducts({}, (pErr, products) => {
+            if (pErr) {
+                console.error('Failed to load products for admin categories:', pErr);
+                req.flash('error', 'Could not load products');
+                return res.redirect('/inventory');
+            }
+            CategoryController.renderAdminCategories(req, res, categories, products || []);
+        });
+    });
+});
+
+// Admin-only category add/delete (users cannot change categories)
+app.post('/admin/categories', checkAuthenticated, checkAdmin, (req, res) => {
+    const name = (req.body.name || '').trim();
+    if (!name) {
+        req.flash('error', 'Category name is required');
+        return res.redirect('/admin/categories');
+    }
+    addCategory(name, (err) => {
+        if (err) {
+            console.error('Failed to add category:', err);
+            req.flash('error', 'Could not add category');
+        } else {
+            req.flash('success', 'Category added');
+        }
+        return res.redirect('/admin/categories');
+    });
+});
+
+app.post('/admin/categories/:id/delete', checkAuthenticated, checkAdmin, (req, res) => {
+    const id = req.params.id;
+    deleteCategoryById(id, (err) => {
+        if (err) {
+            console.error('Failed to delete category:', err);
+            req.flash('error', 'Could not delete category');
+        } else {
+            req.flash('success', 'Category deleted');
+        }
+        return res.redirect('/admin/categories');
+    });
+});
+
+// NOTE: Inline quantity update via AJAX removed — quantities are edited via the product Edit form now.
+
+// Admin view of help center requests
+app.get('/admin/help-center', checkAuthenticated, checkAdmin, (req, res) => {
+    HelpCenterController.renderAdminHelpCenter(req, res, inMemory);
+});
+
+// Admin takes decision on refund: approve or reject
+app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmin, (req, res) => {
+    const refundId = req.params.id;
+    const decision = (req.body.decision || '').toLowerCase();
+    if (decision !== 'approve' && decision !== 'reject') {
+        req.flash('error', 'Invalid decision.');
+        return res.redirect('/admin/help-center');
+    }
+    const newStatus = decision === 'approve' ? 'approved' : 'rejected';
+    updateRefundStatus(refundId, newStatus, (err, r) => {
+        if (err) {
+            console.error('Failed to update refund status:', err);
+            req.flash('error', 'Could not update refund request.');
+        } else {
+            // When approved, mark order as refunded/cancelled and remove from active orders
+            if (newStatus === 'approved') {
+                const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
+                let removedOrder = null;
+                if (idx !== -1) {
+                    removedOrder = inMemory.orders.splice(idx, 1)[0];
+                }
+
+                // Optional: keep a history array on the refund request
+                if (!r.history) r.history = [];
+                r.history.push({ status: 'order cancelled and refund accepted', at: new Date().toISOString() });
+
+                persistStore(() => {
+                    req.flash('success', `Refund accepted and order #${r.orderId} cancelled.`);
+                });
+
+                // Notify user about refund decision
+                addNotification({
+                    role: 'user',
+                    userId: r.userId,
+                    type: 'refund',
+                    message: `Your order #${r.orderId} has been cancelled and refund accepted.`,
+                    link: '/notifications'
+                });
+            } else {
+                req.flash('success', `Refund request #${refundId} rejected.`);
+                // Notify user about refund rejection
+                addNotification({
+                    role: 'user',
+                    userId: r.userId,
+                    type: 'refund',
+                    message: `Your refund request for order #${r.orderId} has been rejected.`,
+                    link: '/orders'
+                });
+            }
+        }
+        return res.redirect('/admin/help-center');
+    });
+});
+
+// Admin takes decision on address change: approve or reject
+app.post('/admin/help-center/address-change/:id/decision', checkAuthenticated, checkAdmin, (req, res) => {
+    const id = req.params.id;
+    const decision = (req.body.decision || '').toLowerCase();
+
+    if (!id || (decision !== 'approve' && decision !== 'reject')) {
+        req.flash('error', 'Invalid decision for address change request.');
+        return res.redirect('/admin/help-center');
+    }
+
+    getAddressChangeRequests((err, list) => {
+        if (err) {
+            console.error('Failed to load address change requests:', err);
+            req.flash('error', 'Could not process address change request.');
+            return res.redirect('/admin/help-center');
+        }
+        const reqItem = (list || []).find(r => String(r.id) === String(id));
+        if (!reqItem) {
+            req.flash('error', 'Address change request not found.');
+            return res.redirect('/admin/help-center');
+        }
+
+        const newStatus = decision === 'approve' ? 'approved' : 'rejected';
+
+        // If approved, also update the order's delivery address in the JSON store
+        if (decision === 'approve') {
+            const order = (inMemory.orders || []).find(o => String(o.id) === String(reqItem.orderId));
+            if (order) {
+                order.deliveryAddress = reqItem.newAddress;
+                if (!order.history) order.history = [];
+                order.history.push({ status: 'address updated', at: new Date().toISOString() });
+            }
+        }
+
+        updateAddressChangeStatus(id, newStatus, (e) => {
+            if (e) {
+                console.error('Failed to update address change status:', e);
+                req.flash('error', 'Could not update address change status.');
+            } else {
+                req.flash('success', `Address change request ${newStatus}.`);
+                // Notify user about address change decision
+                addNotification({
+                    role: 'user',
+                    userId: reqItem.userId,
+                    type: 'address',
+                    message: `Your address change request for order #${reqItem.orderId} has been ${newStatus}.`,
+                    link: '/orders/' + encodeURIComponent(reqItem.orderId)
+                });
+            }
+            persistStore(() => {
+                return res.redirect('/admin/help-center');
+            });
+        });
+    });
+});
+
+// Notifications center for both user and admin
+app.get('/notifications', checkAuthenticated, (req, res) => {
+    NotificationController.renderNotifications(req, res, inMemory.notifications || []);
+});
+
+// Toggle notification read/unread state
+app.post('/notifications/:id/read', checkAuthenticated, (req, res) => {
+    markNotificationRead(req.params.id, (err) => {
+        if (err) console.error('Failed to mark notification read:', err);
+        const redirectTo = req.get('Referer') || '/notifications';
+        res.redirect(redirectTo);
+    });
+});
+
+app.post('/notifications/:id/unread', checkAuthenticated, (req, res) => {
+    markNotificationUnread(req.params.id, (err) => {
+        if (err) console.error('Failed to mark notification unread:', err);
+        const redirectTo = req.get('Referer') || '/notifications';
+        res.redirect(redirectTo);
+    });
+});
+
+// Admin sales analytics page: view revenue & orders by month (paid orders only)
+app.get('/admin/sales', checkAuthenticated, checkAdmin, (req, res) => {
+    const allOrders = (inMemory.orders || []).filter(o => (o.status || '').toLowerCase() === 'paid');
+
+    // Group by YYYY-MM
+    const monthlyMap = {};
+    allOrders.forEach(o => {
+        const date = o.createdAt ? new Date(o.createdAt) : new Date();
+        if (isNaN(date.getTime())) return;
+        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyMap[key]) {
+            monthlyMap[key] = { key, year: date.getFullYear(), month: date.getMonth() + 1, totalRevenue: 0, orderCount: 0 };
+        }
+        const amount = Number(o.subtotal || o.total || 0);
+        monthlyMap[key].totalRevenue += isNaN(amount) ? 0 : amount;
+        monthlyMap[key].orderCount += 1;
+    });
+
+    const monthlySummary = Object.values(monthlyMap).sort((a, b) => a.key.localeCompare(b.key));
+
+    // Selected period filter
+    // mode: 'all' | 'this-month' | 'last-month' | 'ytd' | 'this-year' | 'custom'
+    const mode = (req.query.mode || 'all').trim();
+    const monthParam = (req.query.month || '').trim(); // '01'..'12' when mode === 'custom'
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
+
+    let filteredOrders = allOrders;
+    let selectedSummary = null;
+    let selectedKey = '';
+    if (mode === 'this-month') {
+        const key = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+        filteredOrders = allOrders.filter(o => {
+            const d = o.createdAt ? new Date(o.createdAt) : new Date();
+            if (isNaN(d.getTime())) return false;
+            const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            return k === key;
+        });
+        selectedSummary = monthlyMap[key] || null;
+    } else if (mode === 'last-month') {
+        let y = currentYear;
+        let m = currentMonth - 1;
+        if (m === 0) { m = 12; y = currentYear - 1; }
+        const key = `${y}-${String(m).padStart(2, '0')}`;
+        filteredOrders = allOrders.filter(o => {
+            const d = o.createdAt ? new Date(o.createdAt) : new Date();
+            if (isNaN(d.getTime())) return false;
+            const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            return k === key;
+        });
+        selectedSummary = monthlyMap[key] || null;
+    } else if (mode === 'ytd') {
+        filteredOrders = allOrders.filter(o => {
+            const d = o.createdAt ? new Date(o.createdAt) : new Date();
+            if (isNaN(d.getTime())) return false;
+            return d.getFullYear() === currentYear;
+        });
+        const yKeyPrefix = `${currentYear}-`;
+        selectedSummary = Object.values(monthlyMap)
+            .filter(m => m.key.startsWith(yKeyPrefix))
+            .reduce((acc, m) => {
+                if (!acc) acc = { totalRevenue: 0, orderCount: 0 };
+                acc.totalRevenue += m.totalRevenue;
+                acc.orderCount += m.orderCount;
+                return acc;
+            }, null);
+    } else if (mode === 'this-year') {
+        filteredOrders = allOrders.filter(o => {
+            const d = o.createdAt ? new Date(o.createdAt) : new Date();
+            if (isNaN(d.getTime())) return false;
+            return d.getFullYear() === currentYear;
+        });
+        const yKeyPrefix = `${currentYear}-`;
+        selectedSummary = Object.values(monthlyMap)
+            .filter(m => m.key.startsWith(yKeyPrefix))
+            .reduce((acc, m) => {
+                if (!acc) acc = { totalRevenue: 0, orderCount: 0 };
+                acc.totalRevenue += m.totalRevenue;
+                acc.orderCount += m.orderCount;
+                return acc;
+            }, null);
+    } else if (mode === 'custom' && monthParam) {
+        // Use current year + selected month, e.g. 2025-03
+        const customKey = `${currentYear}-${monthParam}`;
+        filteredOrders = allOrders.filter(o => {
+            const d = o.createdAt ? new Date(o.createdAt) : new Date();
+            if (isNaN(d.getTime())) return false;
+            const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            return k === customKey;
+        });
+        selectedSummary = monthlyMap[customKey] || null;
+        selectedKey = customKey;
+    } // else mode === 'all' => keep allOrders and no selectedSummary
+
+    res.render('admin_sales', {
+        user: req.session.user,
+        monthlySummary,
+        orders: filteredOrders,
+        selectedMonth: selectedKey,
+        selectedSummary,
+        mode
+    });
+});
+
+app.get('/deleteProduct/:id', checkAuthenticated, checkAdmin, (req, res) => {  // Fixed: Added missing auth middleware
+    const productId = req.params.id;
+
+    if (SKIP_DB) {
+        const idx = inMemory.products.findIndex(p => String(p.id) === String(productId));
+        if (idx !== -1) inMemory.products.splice(idx,1);
+        // persist change then redirect
+        return persistStore(() => res.redirect('/inventory'));
+    }
+
+    connection.query('DELETE FROM products WHERE id = ?', [productId], (error, results) => {
+        if (error) {
+            // Handle any error that occurs during the database operation
+            console.error("Error deleting product:", error);
+            res.status(500).send('Error deleting product');
+        } else {
+            // Send a success response
+            res.redirect('/inventory');
+        }
+    });
+});
+
+// helper to get numeric user id from session user object
+function getUserIdFromSessionUser(user) {
+  if (!user) return null;
+  return user.id || user.userId || user.ID || null;
+}
+
+// Save cart (array) to DB for given userId
+// Save cart (array) to DB for given userId
+function saveCartToDB(userId, cart, callback) {
+    if (!userId) return callback && callback(new Error('Missing userId'));
+    const cartJson = JSON.stringify(cart || []);
+    if (SKIP_DB) {
+        // store in-memory for tests/dev
+        saveCartToDB._store = saveCartToDB._store || {};
+        saveCartToDB._store[userId] = cartJson;
+        return callback && callback(null, { ok: true });
+    }
+    const sql = 'INSERT INTO carts (userId, cartData) VALUES (?, ?) ON DUPLICATE KEY UPDATE cartData = VALUES(cartData)';
+    connection.query(sql, [userId, cartJson], function(err, result) {
+        if (err) {
+            console.error('Error saving cart to DB:', err);
+            return callback && callback(err);
+        }
+        callback && callback(null, result);
+    });
+}
+
+// Load cart from DB for given userId
+// Load cart from DB for given userId
+function loadCartFromDB(userId, callback) {
+    if (!userId) return callback && callback(new Error('Missing userId'));
+    if (SKIP_DB) {
+        const raw = (saveCartToDB._store && saveCartToDB._store[userId]) || '[]';
+        try {
+            const cart = JSON.parse(raw);
+            return callback && callback(null, cart);
+        } catch (e) {
+            return callback && callback(e);
+        }
+    }
+    const sql = 'SELECT cartData FROM carts WHERE userId = ?';
+    connection.query(sql, [userId], function(err, results) {
+        if (err) {
+            console.error('Error loading cart from DB:', err);
+            return callback && callback(err);
+        }
+        const cart = (results[0] && results[0].cartData) ? JSON.parse(results[0].cartData) : [];
+        callback && callback(null, cart);
+    });
+}
+
+// DELETE cart item via AJAX — updates session and persists cart if helper exists
+app.delete('/cart/delete/:productId', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const productId = req.params.productId;
+    console.log('DEBUG DELETE /cart/delete/:productId called, productId=', productId);
+    console.log('DEBUG session.user=', req.session && req.session.user ? getUserIdFromSessionUser(req.session.user) : null);
+    if (!req.session.cart || !Array.isArray(req.session.cart)) req.session.cart = [];
+
+    const beforeCount = req.session.cart.length;
+    req.session.cart = req.session.cart.filter(item => String(item.productId) !== String(productId));
+    const removedCount = beforeCount - req.session.cart.length;
+    console.log('DEBUG cart before=', beforeCount, 'after=', req.session.cart.length, 'removed=', removedCount);
+
+    // persist for logged-in user if helpers exist
+    try {
+        if (typeof getUserIdFromSessionUser === 'function') {
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid && typeof saveCartToDB === 'function') {
+                saveCartToDB(uid, req.session.cart, (err) => {
+                    if (err) console.error('Failed to save cart after delete:', err);
+                    console.log('DEBUG saved cart to DB for user', uid);
+                    return res.json({ success: true, removed: removedCount, cartLength: req.session.cart.length });
+                });
+                return;
+            }
+        }
+    } catch (e) {
+        console.error('Cart persistence helper error:', e);
+    }
+
+    return res.json({ success: true, removed: removedCount, cartLength: req.session.cart.length });
+});
+
+// Debug endpoint to inspect session and persisted cart for the logged-in user
+app.get('/_debug/cart', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    loadCartFromDB(uid, (err, persisted) => {
+        if (err) return res.status(500).json({ error: 'Failed to load persisted cart', details: String(err) });
+        res.json({ session: req.session.cart || [], persisted: persisted || [] });
+    });
+});
+
+// Development-only helper: create a test login and pre-populate session (always available)
+app.post('/_test/login', (req, res) => {
+    // create a simple test user and cart in session
+    // allow override via form or JSON for quick testing: ?role=admin or { role: 'admin' }
+    const role = (req.body && req.body.role) || req.query.role || 'user';
+    req.session.user = { id: 1, role: role };
+    req.session.cart = [{ productId: '10', productName: 'Sample', price: 1.0, quantity: 2 }];
+    // also persist to in-memory store if SKIP_DB
+    saveCartToDB(1, req.session.cart, () => {
+        res.json({ ok: true, user: req.session.user, cart: req.session.cart });
+    });
+});
+// Convenience GET endpoint for quick testing in a browser
+app.get('/_test/login', (req, res) => {
+    const role = (req.query && req.query.role) || 'user';
+    req.session.user = { id: 1, role: role };
+    req.session.cart = [{ productId: '10', productName: 'Sample', price: 1.0, quantity: 2 }];
+    saveCartToDB(1, req.session.cart, () => {
+        // Redirect admin to inventory, regular users to shopping
+        if (role === 'admin') return res.redirect('/inventory');
+        return res.redirect('/shopping');
+    });
+});
+
+// ------------------ Orders / Checkout / Payment routes ------------------
+
+// Delivery details page
+app.get('/delivery-details', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const cart = req.session.cart || [];
+    if (!cart || cart.length === 0) {
+        req.flash('error', 'Your cart is empty.');
+        return res.redirect('/cart');
+    }
+    const errors = req.flash('error');
+    res.render('delivery_details', { user: req.session.user, errors });
+});
+
+app.post('/delivery-details', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const { fullName, street, unit, postalCode, note } = req.body || {};
+    if (!fullName || !street || !postalCode) {
+        req.flash('error', 'Please fill in name, street and postal code.');
+        return res.redirect('/delivery-details');
+    }
+    req.session.delivery = { fullName, street, unit, postalCode, note };
+    return res.redirect('/checkout');
+});
+
+// GET checkout page
+app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const baseCart = req.session.cart || [];
+    const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+        ? req.session.selectedCartItems
+        : baseCart;
+    if (!cart || cart.length === 0) {
+        req.flash('error', 'Your cart is empty.');
+        return res.redirect('/cart');
+    }
+    if (!req.session.delivery) {
+        return res.redirect('/delivery-details');
+    }
+    const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+    const errors = req.flash('error');
+    const success = req.flash('success');
+    const membership = buildMembershipSummary(req.session.user || {});
+    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership, paypalClientId: PAYPAL_CLIENT_ID, paypalCurrency: PAYPAL_CURRENCY });
+});
+
+// POST checkout -> choose delivery & payment
+app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
+    console.log('POST /checkout body:', req.body);
+    const { deliveryOption, paymentMethod, usePointsFreeDelivery } = req.body || {};
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+
+        if (!cart || cart.length === 0) {
+                req.flash('error', 'Cart is empty');
+                return res.redirect('/cart');
+        }
+
+        const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+
+        const now = new Date();
+        const cutoffHour = 13; // 1pm
+        let deliveryCost = 10;
+        let pointsRedeemed = 0;
+
+        if (deliveryOption === 'one-day') {
+                if (now.getHours() >= cutoffHour) {
+                        req.flash('error', 'One-day delivery must be ordered before 1pm. Please choose Normal delivery or order earlier.');
+                        return res.redirect('/checkout');
+                }
+                deliveryCost = 25;
+        }
+
+            // Membership: allow redeeming points for free normal delivery
+            const user = req.session.user || null;
+            const membership = buildMembershipSummary(user || {});
+            const wantsFreeDelivery = usePointsFreeDelivery === 'on' || usePointsFreeDelivery === '1';
+            if (wantsFreeDelivery && deliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+                deliveryCost = 0;
+                pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+            }
+
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        const orderBase = {
+                userId: getUserIdFromSessionUser(req.session.user),
+                items: cart.slice(),
+                subtotal,
+                deliveryOption: deliveryOption || 'normal',
+                deliveryCost,
+                total,
+            paymentMethod: paymentMethod || 'card',
+            delivery: req.session.delivery || null
+        };
+
+        // QR branch
+        if (paymentMethod === 'qr') {
+                const temp = Object.assign({}, orderBase, {
+                        status: 'pending_payment',
+                        deliveryStatus: 'processing'
+                });
+                addOrder(temp, (err, created) => {
+                        if (err || !created || !created.id) {
+                                console.error('Order create warning (QR):', err);
+                                req.flash('error', 'Could not create order. Please try again.');
+                                return res.redirect('/checkout');
+                        }
+                        req.session.recentOrderId = created.id;
+                        return res.redirect('/pay/qr/' + encodeURIComponent(created.id));
+                });
+                return;
+        }
+
+        // Card branch (default) - always proceed and then redirect
+        const cardNumber = (req.body.cardNumber || '').replace(/\s+/g, '');
+        const cvv = (req.body.cvv || '').replace(/\s+/g, '');
+        const holder = (req.body.cardHolder || '').trim();
+
+        const toCreate = Object.assign({}, orderBase, {
+            status: 'paid',
+            paymentDetails: {
+                method: 'card',
+                holder,
+                last4: cardNumber.slice(-4),
+                cvv
+            },
+            deliveryStatus: 'processing',
+            membership: {
+                pointsEarned: Math.floor(subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: pointsRedeemed
+            }
+        });
+
+        addOrder(toCreate, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (card):', err);
+                req.flash('error', 'Order was created with warnings.');
+                return res.redirect('/orders');
+            }
+
+            // Deduct stock from products for each item in the paid order
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // clear selected items and/or cart and save
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Award and redeem membership points for paid orders
+            try {
+                if (user && uid) {
+                    const earned = Math.floor(subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (pointsRedeemed > 0) {
+                        currentPoints = Math.max(0, currentPoints - pointsRedeemed);
+                    }
+                    req.session.user.points = currentPoints;
+                    // Optionally, persist to DB users table if available
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications for new paid order
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username}.`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            req.session.lastOrderId = created.id;
+            req.flash('success', 'Payment successful. Order placed.');
+            return res.redirect('/payment-processing');
+        });
+});
+
+// ---------------- PayPal API endpoints ----------------
+// Helper to compute delivery costs and totals consistently with existing logic
+function computeCheckoutTotals(cart, deliveryOption, usePointsFlag, user) {
+    const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+    const now = new Date();
+    const cutoffHour = 13; // 1pm
+    let deliveryCost = 10;
+    if (deliveryOption === 'one-day') {
+        if (now.getHours() >= cutoffHour) {
+            return { error: 'One-day delivery must be ordered before 1pm.' };
+        }
+        deliveryCost = 25;
+    }
+    const membership = buildMembershipSummary(user || {});
+    const wantsFreeDelivery = usePointsFlag === 'on' || usePointsFlag === '1' || usePointsFlag === true;
+    let pointsRedeemed = 0;
+    if (wantsFreeDelivery && deliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+        deliveryCost = 0;
+        pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+    }
+    const total = Number(subtotal) + Number(deliveryCost);
+    return { subtotal, deliveryCost, pointsRedeemed, total, membership };
+}
+
+// Create PayPal order
+app.post('/api/paypal/order/create', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        if (!cart || cart.length === 0) return res.status(400).json({ error: 'Cart is empty' });
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const request = new paypalSdk.orders.OrdersCreateRequest();
+        request.prefer('return=representation');
+        request.requestBody({
+            intent: 'CAPTURE',
+            purchase_units: [
+                {
+                    amount: {
+                        currency_code: PAYPAL_CURRENCY,
+                        value: Number(totals.total).toFixed(2)
+                    }
+                }
+            ]
+        });
+        const response = await paypalClient.execute(request);
+        return res.json({ id: response.result.id });
+    } catch (e) {
+        console.error('PayPal order create error:', e);
+        return res.status(500).json({ error: 'Failed to create PayPal order' });
+    }
+});
+
+// Capture PayPal order and create local order
+app.post('/api/paypal/order/capture', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const { orderID, deliveryOption, usePointsFreeDelivery } = req.body || {};
+        if (!orderID) return res.status(400).json({ error: 'Missing PayPal order ID' });
+
+        const captureRequest = new paypalSdk.orders.OrdersCaptureRequest(orderID);
+        captureRequest.requestBody({});
+        const capture = await paypalClient.execute(captureRequest);
+        if (!capture || !capture.result || capture.result.status !== 'COMPLETED') {
+            return res.status(400).json({ error: 'Payment not completed' });
+        }
+
+        // Build local order
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal: totals.subtotal,
+            deliveryOption: deliveryOption || 'normal',
+            deliveryCost: totals.deliveryCost,
+            total: totals.total,
+            paymentMethod: 'paypal',
+            delivery: req.session.delivery || null,
+            membership: {
+                pointsEarned: Math.floor(totals.subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: totals.pointsRedeemed
+            },
+            paymentDetails: {
+                method: 'paypal',
+                paypalOrderId: orderID
+            },
+            status: 'paid',
+            deliveryStatus: 'processing'
+        };
+
+        addOrder(orderBase, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (paypal):', err);
+                return res.status(500).json({ error: 'Could not create local order' });
+            }
+
+            // Deduct stock from products for each item
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart and persist
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Award/redeem membership points
+            try {
+                const user = req.session.user;
+                if (user && uid) {
+                    const earned = Math.floor(totals.subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (totals.pointsRedeemed > 0) {
+                        currentPoints = Math.max(0, currentPoints - totals.pointsRedeemed);
+                    }
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username}.`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            req.session.lastOrderId = created.id;
+            // Return orderId so client can redirect directly to order detail
+            return res.json({ success: true, orderId: created.id, redirect: '/orders/' + encodeURIComponent(created.id) });
+        });
+    } catch (e) {
+        console.error('PayPal order capture error:', e);
+        return res.status(500).json({ error: 'Failed to capture PayPal order' });
+    }
+});
+
+// Payment processing + success redirect
+app.get('/payment-processing', checkAuthenticated, checkNotAdmin, (req, res) => {
+    if (!req.session.lastOrderId) {
+        return res.redirect('/orders');
+    }
+    res.render('payment_processing', { user: req.session.user });
+});
+
+app.get('/payment-success', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const id = req.session.lastOrderId;
+    if (!id) return res.redirect('/orders');
+    return res.redirect('/orders/' + encodeURIComponent(id));
+});
+
+// QR payment page (shows QR and allows simulating confirmation)
+app.get('/pay/qr/:id', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const id = req.params.id;
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    if (!o) return res.status(404).send('Order not found');
+    res.render('pay_qr', { order: o, user: req.session.user });
+});
+
+// Confirm QR payment (simulate the callback from payment app)
+app.post('/pay/qr/:id/confirm', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const id = req.params.id;
+    // mark order as paid
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    if (!o) return res.status(404).send('Order not found');
+    o.status = 'paid';
+    if (!o.history) o.history = [];
+    o.history.push({ status: 'paid', at: new Date().toISOString() });
+    // update delivery estimate
+    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
+    o.new = true;
+    persistStore(() => {
+        // clear cart
+        req.session.cart = [];
+        const uid = getUserIdFromSessionUser(req.session.user);
+        if (uid) saveCartToDB(uid, req.session.cart, () => {});
+        return res.redirect('/orders/' + encodeURIComponent(o.id));
+    });
+});
+
+// User Help Center
+app.get('/help-center', checkAuthenticated, checkNotAdmin, (req, res) => {
+    HelpCenterController.renderUserHelpCenter(req, res, inMemory.orders || [], getUserIdFromSessionUser);
+});
+
+app.post('/help-center/address-change', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const userId = getUserIdFromSessionUser(req.session.user);
+    const { orderId, newAddress, reason } = req.body || {};
+    if (!orderId || !newAddress) {
+        req.flash('error', 'Please select an order and provide a new address.');
+        return res.redirect('/help-center');
+    }
+    // Ensure order belongs to user and is in packed state
+    getOrdersByUser(userId, (err, orders) => {
+        if (err) {
+            console.error('Failed to load orders for address change:', err);
+            req.flash('error', 'Could not submit request');
+            return res.redirect('/help-center');
+        }
+        const order = (orders || []).find(o => String(o.id) === String(orderId));
+        if (!order) {
+            req.flash('error', 'Order not found.');
+            return res.redirect('/help-center');
+        }
+        const status = (order.deliveryStatus || '').toLowerCase();
+        if (status !== 'packed') {
+            req.flash('error', 'Address change is only allowed when the order status is "item packed".');
+            return res.redirect('/help-center');
+        }
+        addAddressChangeRequest({
+            userId,
+            username: req.session.user.username,
+            orderId: order.id,
+            newAddress,
+            reason
+        }, (e) => {
+            if (e) {
+                console.error('Failed to save address change request:', e);
+                req.flash('error', 'Could not submit request. Please try again.');
+            } else {
+                req.flash('success', 'Address change request submitted. Our team will review it.');
+                // Notify admin about new address change request
+                addNotification({
+                    role: 'admin',
+                    type: 'address',
+                    message: `New address change request for order #${order.id} from ${req.session.user.username}.`,
+                    link: '/admin/help-center'
+                });
+                // Notify user confirming submission
+                addNotification({
+                    role: 'user',
+                    userId,
+                    type: 'address',
+                    message: `Your address change request for order #${order.id} has been submitted.`,
+                    link: '/help-center'
+                });
+            }
+            return res.redirect('/help-center');
+        });
+    });
+});
+
+app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const userId = getUserIdFromSessionUser(req.session.user);
+    const { orderId, reason } = req.body || {};
+    if (!orderId || !reason) {
+        req.flash('error', 'Please select an order and provide a reason for refund.');
+        return res.redirect('/help-center');
+    }
+    getOrdersByUser(userId, (err, orders) => {
+        if (err) {
+            console.error('Failed to load orders for refund:', err);
+            req.flash('error', 'Could not submit request');
+            return res.redirect('/help-center');
+        }
+        const order = (orders || []).find(o => String(o.id) === String(orderId));
+        if (!order) {
+            req.flash('error', 'Order not found.');
+            return res.redirect('/help-center');
+        }
+        if ((order.status || '').toLowerCase() !== 'paid') {
+            req.flash('error', 'Only paid orders can be refunded.');
+            return res.redirect('/help-center');
+        }
+        addRefundRequest({
+            userId,
+            username: req.session.user.username,
+            orderId: order.id,
+            reason
+        }, (e) => {
+            if (e) {
+                console.error('Failed to save refund request:', e);
+                req.flash('error', 'Could not submit refund request.');
+            } else {
+                req.flash('success', 'Refund request submitted. We will notify you once it is reviewed.');
+                // Notify admin about new refund request
+                addNotification({
+                    role: 'admin',
+                    type: 'refund',
+                    message: `New refund request for order #${order.id} from ${req.session.user.username}.`,
+                    link: '/admin/help-center'
+                });
+                // Notify user confirming submission
+                addNotification({
+                    role: 'user',
+                    userId,
+                    type: 'refund',
+                    message: `Your refund request for order #${order.id} has been submitted.`,
+                    link: '/help-center'
+                });
+            }
+            return res.redirect('/help-center');
+        });
+    });
+});
+
+// User: list orders
+app.get('/orders', checkAuthenticated, (req, res) => {
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const orders = OrderModel.getOrdersByUser(inMemory.orders, uid);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
+        });
+    });
+    return res.render('orders', { orders: safeOrders, user: req.session.user });
+});
+
+// User: order detail
+app.get('/orders/:id', checkAuthenticated, (req, res) => {
+    return OrderController.showOrderDetail(req, res, inMemory.orders);
+});
+
+// User: invoice / print view for a single order
+app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
+    const id = req.params.id;
+    const uid = getUserIdFromSessionUser(req.session.user);
+    const o = OrderModel.getOrderById(inMemory.orders, id);
+    if (!o) {
+        req.flash('error', 'Order not found.');
+        return res.redirect('/orders');
+    }
+
+    // Only the owner user or an admin can view this invoice
+    if (String(o.userId) !== String(uid) && !(req.session.user && req.session.user.role === 'admin')) {
+        req.flash('error', 'You are not allowed to view this invoice.');
+        return res.redirect('/orders');
+    }
+
+    const withDelivery = Object.assign({}, o, {
+        estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
+    });
+
+    res.render('invoice', { order: withDelivery, user: req.session.user });
+});
+
+// Admin: view all orders
+app.get('/admin/orders', checkAuthenticated, checkAdmin, (req, res) => {
+    const orders = OrderModel.getAllOrders(inMemory.orders);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
+        });
+    });
+
+    const errors = req.flash('error');
+    const success = req.flash('success');
+    return res.render('admin_orders', { orders: safeOrders, user: req.session.user, errors, success });
+});
+
+// Admin: update order status
+app.post('/admin/orders/:id/status', checkAuthenticated, checkAdmin, (req, res) => {
+    const id = req.params.id;
+    const status = req.body.status;
+    if (!status) return res.redirect('/admin/orders');
+    updateOrderStatus(id, status, (err, updated) => {
+        if (err) {
+            console.error('Failed to update order status:', err);
+            req.flash('error', 'Could not update status. Please try again.');
+        } else {
+            req.flash('success', 'Status updated');
+        }
+        return res.redirect('/admin/orders');
+    });
+});
+
+
+// Start the server
+// Export app for tests and only start server when script is run directly
+if (require.main === module) {
+    const port = process.env.PORT || 3001;
+    app.listen(port, () => {
+        console.log('Server is running on http://localhost:' + port);
+    });
+}
+
+module.exports = app;

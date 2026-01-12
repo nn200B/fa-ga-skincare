@@ -1,0 +1,19 @@
+# OS/Editor
+.DS_Store
+Thumbs.db
+
+# Archives
+*.zip
+
+# Logs
+*.log
+
+# Project-level (optional)
+Team3 Milestone 2/
+C372 Individual Graded Assignment AI Interaction Journal - 24049512 - JUSTIN TAN.docx
+
+# App: fa-ga-skincare-main
+fa-ga-skincare-main/node_modules/
+fa-ga-skincare-main/.env
+fa-ga-skincare-main/data/store.json
+fa-ga-skincare-main/data/run-output.txt
