@@ -15,11 +15,9 @@
     "ejs": "^3.1.10",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
-    "dotenv": "^16.4.5",
     "multer": "^2.0.2",
     "mysql2": "^3.15.3",
-    "nodemon": "^3.1.10",
-    "@paypal/checkout-server-sdk": "^1.0.3"
+    "nodemon": "^3.1.10"
   },
   "devDependencies": {
     "chai": "^4.3.7",

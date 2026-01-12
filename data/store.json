@@ -130,37 +130,35 @@
       "userId": 5,
       "items": [
         {
-          "productId": 1,
-          "productName": "Velvet Cloud Cream Cleanser",
-          "price": "29.00",
+          "productId": 3,
+          "productName": "Radiance Vitamin C Serum 15%",
+          "price": "69.00",
           "quantity": 1,
-          "image": "cleanser_velvet_cloud.png"
+          "image": "serum_vitc_15.png"
         }
       ],
-      "subtotal": 29,
-      "deliveryOption": "one-day",
-      "deliveryCost": 25,
-      "total": 54,
-      "paymentMethod": "paypal",
+      "subtotal": 69,
+      "deliveryOption": "normal",
+      "deliveryCost": 10,
+      "total": 79,
+      "paymentMethod": "card",
       "delivery": {
-        "fullName": "justin",
-        "street": "somewhere",
-        "unit": "01-01",
-        "postalCode": "111000",
-        "note": ""
-      },
-      "membership": {
-        "pointsEarned": 29,
-        "pointsRedeemed": 0
-      },
-      "paymentDetails": {
-        "method": "paypal",
-        "paypalOrderId": "0D908535MX534145F"
+        "fullName": "rety",
+        "street": "retr",
+        "unit": "wret",
+        "postalCode": "werfrew",
+        "note": "rg"
       },
       "status": "paid",
+      "paymentDetails": {
+        "method": "card",
+        "holder": "",
+        "last4": "",
+        "cvv": ""
+      },
       "deliveryStatus": "processing",
       "id": 1,
-      "createdAt": "2026-01-12T03:17:48.348Z"
+      "createdAt": "2025-12-11T05:31:43.175Z"
     }
   ],
   "nextOrderId": 2,
@@ -170,9 +168,9 @@
       "userId": null,
       "role": "admin",
       "type": "order",
-      "message": "New paid order #1 from user1.",
+      "message": "New paid order #1 from n.",
       "link": "/admin/orders",
-      "createdAt": "2026-01-12T03:17:48.350Z",
+      "createdAt": "2025-12-11T05:31:43.184Z",
       "read": false
     },
     {
@@ -182,7 +180,7 @@
       "type": "order",
       "message": "Your order #1 has been placed successfully.",
       "link": "/orders/1",
-      "createdAt": "2026-01-12T03:17:48.350Z",
+      "createdAt": "2025-12-11T05:31:43.185Z",
       "read": false
     }
   ],
@@ -190,7 +188,5 @@
   "refundRequests": [],
   "nextRefundId": 1,
   "addressChangeRequests": [],
-  "nextAddressChangeId": 1,
-  "users": [],
-  "nextUserId": 1
+  "nextAddressChangeId": 1
 }
