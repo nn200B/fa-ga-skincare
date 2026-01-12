@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const session = require('express-session');
@@ -15,6 +16,20 @@ const CategoryController = require('./controllers/CategoryController');
 const NotificationController = require('./controllers/NotificationController');
 const ProfileController = require('./controllers/ProfileController');
 const { addBusinessDays, estimateDeliveryDate } = require('./utils/orderUtils');
+const paypalSdk = require('@paypal/checkout-server-sdk');
+
+// PayPal environment setup
+const PAYPAL_ENV = (process.env.PAYPAL_ENV || 'sandbox').toLowerCase();
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
+let paypalEnvironment;
+if (PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET) {
+    paypalEnvironment = PAYPAL_ENV === 'live'
+        ? new paypalSdk.core.LiveEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+        : new paypalSdk.core.SandboxEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET);
+}
+const paypalClient = paypalEnvironment ? new paypalSdk.core.PayPalHttpClient(paypalEnvironment) : null;
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -1825,7 +1840,7 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
     const errors = req.flash('error');
     const success = req.flash('success');
     const membership = buildMembershipSummary(req.session.user || {});
-    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership });
+    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership, paypalClientId: PAYPAL_CLIENT_ID, paypalCurrency: PAYPAL_CURRENCY });
 });
 
 // POST checkout -> choose delivery & payment
@@ -1993,6 +2008,192 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
             req.flash('success', 'Payment successful. Order placed.');
             return res.redirect('/payment-processing');
         });
+});
+
+// ---------------- PayPal API endpoints ----------------
+// Helper to compute delivery costs and totals consistently with existing logic
+function computeCheckoutTotals(cart, deliveryOption, usePointsFlag, user) {
+    const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+    const now = new Date();
+    const cutoffHour = 13; // 1pm
+    let deliveryCost = 10;
+    if (deliveryOption === 'one-day') {
+        if (now.getHours() >= cutoffHour) {
+            return { error: 'One-day delivery must be ordered before 1pm.' };
+        }
+        deliveryCost = 25;
+    }
+    const membership = buildMembershipSummary(user || {});
+    const wantsFreeDelivery = usePointsFlag === 'on' || usePointsFlag === '1' || usePointsFlag === true;
+    let pointsRedeemed = 0;
+    if (wantsFreeDelivery && deliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+        deliveryCost = 0;
+        pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+    }
+    const total = Number(subtotal) + Number(deliveryCost);
+    return { subtotal, deliveryCost, pointsRedeemed, total, membership };
+}
+
+// Create PayPal order
+app.post('/api/paypal/order/create', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        if (!cart || cart.length === 0) return res.status(400).json({ error: 'Cart is empty' });
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const request = new paypalSdk.orders.OrdersCreateRequest();
+        request.prefer('return=representation');
+        request.requestBody({
+            intent: 'CAPTURE',
+            purchase_units: [
+                {
+                    amount: {
+                        currency_code: PAYPAL_CURRENCY,
+                        value: Number(totals.total).toFixed(2)
+                    }
+                }
+            ]
+        });
+        const response = await paypalClient.execute(request);
+        return res.json({ id: response.result.id });
+    } catch (e) {
+        console.error('PayPal order create error:', e);
+        return res.status(500).json({ error: 'Failed to create PayPal order' });
+    }
+});
+
+// Capture PayPal order and create local order
+app.post('/api/paypal/order/capture', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const { orderID, deliveryOption, usePointsFreeDelivery } = req.body || {};
+        if (!orderID) return res.status(400).json({ error: 'Missing PayPal order ID' });
+
+        const captureRequest = new paypalSdk.orders.OrdersCaptureRequest(orderID);
+        captureRequest.requestBody({});
+        const capture = await paypalClient.execute(captureRequest);
+        if (!capture || !capture.result || capture.result.status !== 'COMPLETED') {
+            return res.status(400).json({ error: 'Payment not completed' });
+        }
+
+        // Build local order
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal: totals.subtotal,
+            deliveryOption: deliveryOption || 'normal',
+            deliveryCost: totals.deliveryCost,
+            total: totals.total,
+            paymentMethod: 'paypal',
+            delivery: req.session.delivery || null,
+            membership: {
+                pointsEarned: Math.floor(totals.subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: totals.pointsRedeemed
+            },
+            paymentDetails: {
+                method: 'paypal',
+                paypalOrderId: orderID
+            },
+            status: 'paid',
+            deliveryStatus: 'processing'
+        };
+
+        addOrder(orderBase, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (paypal):', err);
+                return res.status(500).json({ error: 'Could not create local order' });
+            }
+
+            // Deduct stock from products for each item
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart and persist
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Award/redeem membership points
+            try {
+                const user = req.session.user;
+                if (user && uid) {
+                    const earned = Math.floor(totals.subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (totals.pointsRedeemed > 0) {
+                        currentPoints = Math.max(0, currentPoints - totals.pointsRedeemed);
+                    }
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username}.`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            req.session.lastOrderId = created.id;
+            // Return orderId so client can redirect directly to order detail
+            return res.json({ success: true, orderId: created.id, redirect: '/orders/' + encodeURIComponent(created.id) });
+        });
+    } catch (e) {
+        console.error('PayPal order capture error:', e);
+        return res.status(500).json({ error: 'Failed to capture PayPal order' });
+    }
 });
 
 // Payment processing + success redirect

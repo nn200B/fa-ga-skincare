@@ -130,39 +130,37 @@
       "userId": 5,
       "items": [
         {
-          "productId": 2,
-          "productName": "Green Tea Gel Cleanser",
-          "price": "24.00",
+          "productId": 1,
+          "productName": "Velvet Cloud Cream Cleanser",
+          "price": "29.00",
           "quantity": 1,
-          "image": "cleanser_green_tea.png"
+          "image": "cleanser_velvet_cloud.png"
         }
       ],
-      "subtotal": 24,
-      "deliveryOption": "normal",
-      "deliveryCost": 10,
-      "total": 34,
-      "paymentMethod": "card",
+      "subtotal": 29,
+      "deliveryOption": "one-day",
+      "deliveryCost": 25,
+      "total": 54,
+      "paymentMethod": "paypal",
       "delivery": {
-        "fullName": "sdg",
-        "street": "fhd",
-        "unit": "gf",
-        "postalCode": "hgdghd",
-        "note": "dh"
+        "fullName": "justin",
+        "street": "somewhere",
+        "unit": "01-01",
+        "postalCode": "111000",
+        "note": ""
       },
-      "status": "paid",
-      "paymentDetails": {
-        "method": "card",
-        "holder": "",
-        "last4": "",
-        "cvv": ""
-      },
-      "deliveryStatus": "processing",
       "membership": {
-        "pointsEarned": 24,
+        "pointsEarned": 29,
         "pointsRedeemed": 0
       },
+      "paymentDetails": {
+        "method": "paypal",
+        "paypalOrderId": "0D908535MX534145F"
+      },
+      "status": "paid",
+      "deliveryStatus": "processing",
       "id": 1,
-      "createdAt": "2025-12-12T07:34:58.452Z"
+      "createdAt": "2026-01-12T03:17:48.348Z"
     }
   ],
   "nextOrderId": 2,
@@ -172,9 +170,9 @@
       "userId": null,
       "role": "admin",
       "type": "order",
-      "message": "New paid order #1 from n.",
+      "message": "New paid order #1 from user1.",
       "link": "/admin/orders",
-      "createdAt": "2025-12-12T07:34:58.458Z",
+      "createdAt": "2026-01-12T03:17:48.350Z",
       "read": false
     },
     {
@@ -184,7 +182,7 @@
       "type": "order",
       "message": "Your order #1 has been placed successfully.",
       "link": "/orders/1",
-      "createdAt": "2025-12-12T07:34:58.460Z",
+      "createdAt": "2026-01-12T03:17:48.350Z",
       "read": false
     }
   ],
