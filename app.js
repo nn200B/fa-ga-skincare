@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const session = require('express-session');
@@ -7,6 +8,28 @@ const app = express();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const OrderController = require('./controllers/OrderController');
+const OrderModel = require('./models/Order');
+const NotificationModel = require('./models/Notification');
+const HelpCenterController = require('./controllers/HelpCenterController');
+const CategoryController = require('./controllers/CategoryController');
+const NotificationController = require('./controllers/NotificationController');
+const ProfileController = require('./controllers/ProfileController');
+const { addBusinessDays, estimateDeliveryDate } = require('./utils/orderUtils');
+const paypalSdk = require('@paypal/checkout-server-sdk');
+
+// PayPal environment setup
+const PAYPAL_ENV = (process.env.PAYPAL_ENV || 'sandbox').toLowerCase();
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
+let paypalEnvironment;
+if (PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET) {
+    paypalEnvironment = PAYPAL_ENV === 'live'
+        ? new paypalSdk.core.LiveEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+        : new paypalSdk.core.SandboxEnvironment(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET);
+}
+const paypalClient = paypalEnvironment ? new paypalSdk.core.PayPalHttpClient(paypalEnvironment) : null;
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -826,28 +849,7 @@ app.post('/login', (req, res) => {
 
 // Profile page (both user and admin)
 app.get('/profile', checkAuthenticated, (req, res) => {
-    const sessionUser = req.session.user;
-    getUserById(sessionUser.id, (err, dbUser) => {
-        if (err || !dbUser) {
-            console.error('Failed to load profile user:', err);
-            req.flash('error', 'Could not load profile.');
-            return res.redirect('/');
-        }
-        const formData = {
-            username: dbUser.username,
-            email: dbUser.email,
-            address: dbUser.address,
-            contact: dbUser.contact
-        };
-        res.render('profile', {
-            user: dbUser,
-            messages: req.flash('success'),
-            errors: req.flash('error'),
-            formData,
-            passwordStep: req.session.passwordStep || 'start',
-            otpHint: req.session.passwordOtpHint || null
-        });
-    });
+    ProfileController.renderProfile(req, res, getUserById);
 });
 
 // Update profile details
@@ -1360,8 +1362,7 @@ app.get('/categories_user', checkAuthenticated, (req, res) => {
             console.error('Failed to load categories:', err);
             return res.status(500).send('Failed to load categories');
         }
-        const categories = rows || [];
-        return res.render('categories_user', { categories, user: req.session.user });
+        return CategoryController.renderUserCategories(req, res, rows || []);
     });
 });
 
@@ -1374,18 +1375,13 @@ app.get('/admin/categories', checkAuthenticated, checkAdmin, (req, res) => {
             return res.redirect('/inventory');
         }
         const categories = catRows || [];
-        // load all products once, then group by category name
         getProducts({}, (pErr, products) => {
             if (pErr) {
                 console.error('Failed to load products for admin categories:', pErr);
                 req.flash('error', 'Could not load products');
                 return res.redirect('/inventory');
             }
-            const grouped = categories.map(c => {
-                const items = (products || []).filter(p => (p.category || '') === c.name);
-                return { category: c, products: items };
-            });
-            res.render('categories', { user: req.session.user, groupedCategories: grouped });
+            CategoryController.renderAdminCategories(req, res, categories, products || []);
         });
     });
 });
@@ -1425,23 +1421,7 @@ app.post('/admin/categories/:id/delete', checkAuthenticated, checkAdmin, (req, r
 
 // Admin view of help center requests
 app.get('/admin/help-center', checkAuthenticated, checkAdmin, (req, res) => {
-    getRefunds((rErr, refunds) => {
-        if (rErr) {
-            console.error('Failed to load refunds:', rErr);
-        }
-        getAddressChangeRequests((aErr, addressChanges) => {
-            if (aErr) {
-                console.error('Failed to load address changes:', aErr);
-            }
-            res.render('admin_help_center', {
-                user: req.session.user,
-                refunds: refunds || [],
-                addressChanges: addressChanges || [],
-                errors: req.flash('error'),
-                success: req.flash('success')
-            });
-        });
-    });
+    HelpCenterController.renderAdminHelpCenter(req, res, inMemory);
 });
 
 // Admin takes decision on refund: approve or reject
@@ -1556,29 +1536,7 @@ app.post('/admin/help-center/address-change/:id/decision', checkAuthenticated, c
 
 // Notifications center for both user and admin
 app.get('/notifications', checkAuthenticated, (req, res) => {
-    const filter = (req.query.filter || 'all').toLowerCase(); // 'all' | 'unread' | 'read'
-    getNotificationsForUser(req.session.user, (err, list) => {
-        if (err) {
-            console.error('Failed to load notifications:', err);
-            req.flash('error', 'Could not load notifications');
-            return res.redirect('/');
-        }
-        const allList = list || [];
-        let filtered = allList;
-        if (filter === 'unread') {
-            filtered = allList.filter(n => !n.read);
-        } else if (filter === 'read') {
-            filtered = allList.filter(n => n.read);
-        }
-        res.render('notifications', {
-            user: req.session.user,
-            notifications: filtered,
-            filter,
-            totalUnread: allList.filter(n => !n.read).length,
-            errors: req.flash('error'),
-            success: req.flash('success')
-        });
-    });
+    NotificationController.renderNotifications(req, res, inMemory.notifications || []);
 });
 
 // Toggle notification read/unread state
@@ -1844,30 +1802,6 @@ app.get('/_test/login', (req, res) => {
 
 // ------------------ Orders / Checkout / Payment routes ------------------
 
-function addBusinessDays(date, days) {
-    const d = new Date(date);
-    let added = 0;
-    while (added < days) {
-        d.setDate(d.getDate() + 1);
-        const day = d.getDay(); // 0 Sun, 6 Sat
-        if (day !== 0 && day !== 6) added++;
-    }
-    return d;
-}
-
-function estimateDeliveryDate(createdAtIso, deliveryOption) {
-    try {
-        const created = new Date(createdAtIso || new Date().toISOString());
-        if (deliveryOption === 'one-day') {
-            return addBusinessDays(created, 1).toISOString();
-        }
-        // normal -> 3 business days
-        return addBusinessDays(created, 3).toISOString();
-    } catch (e) {
-        return new Date().toISOString();
-    }
-}
-
 // Delivery details page
 app.get('/delivery-details', checkAuthenticated, checkNotAdmin, (req, res) => {
     const cart = req.session.cart || [];
@@ -1906,7 +1840,7 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
     const errors = req.flash('error');
     const success = req.flash('success');
     const membership = buildMembershipSummary(req.session.user || {});
-    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership });
+    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership, paypalClientId: PAYPAL_CLIENT_ID, paypalCurrency: PAYPAL_CURRENCY });
 });
 
 // POST checkout -> choose delivery & payment
@@ -2076,6 +2010,192 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
         });
 });
 
+// ---------------- PayPal API endpoints ----------------
+// Helper to compute delivery costs and totals consistently with existing logic
+function computeCheckoutTotals(cart, deliveryOption, usePointsFlag, user) {
+    const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+    const now = new Date();
+    const cutoffHour = 13; // 1pm
+    let deliveryCost = 10;
+    if (deliveryOption === 'one-day') {
+        if (now.getHours() >= cutoffHour) {
+            return { error: 'One-day delivery must be ordered before 1pm.' };
+        }
+        deliveryCost = 25;
+    }
+    const membership = buildMembershipSummary(user || {});
+    const wantsFreeDelivery = usePointsFlag === 'on' || usePointsFlag === '1' || usePointsFlag === true;
+    let pointsRedeemed = 0;
+    if (wantsFreeDelivery && deliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+        deliveryCost = 0;
+        pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+    }
+    const total = Number(subtotal) + Number(deliveryCost);
+    return { subtotal, deliveryCost, pointsRedeemed, total, membership };
+}
+
+// Create PayPal order
+app.post('/api/paypal/order/create', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        if (!cart || cart.length === 0) return res.status(400).json({ error: 'Cart is empty' });
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const request = new paypalSdk.orders.OrdersCreateRequest();
+        request.prefer('return=representation');
+        request.requestBody({
+            intent: 'CAPTURE',
+            purchase_units: [
+                {
+                    amount: {
+                        currency_code: PAYPAL_CURRENCY,
+                        value: Number(totals.total).toFixed(2)
+                    }
+                }
+            ]
+        });
+        const response = await paypalClient.execute(request);
+        return res.json({ id: response.result.id });
+    } catch (e) {
+        console.error('PayPal order create error:', e);
+        return res.status(500).json({ error: 'Failed to create PayPal order' });
+    }
+});
+
+// Capture PayPal order and create local order
+app.post('/api/paypal/order/capture', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        if (!paypalClient) {
+            return res.status(500).json({ error: 'PayPal not configured' });
+        }
+        const { orderID, deliveryOption, usePointsFreeDelivery } = req.body || {};
+        if (!orderID) return res.status(400).json({ error: 'Missing PayPal order ID' });
+
+        const captureRequest = new paypalSdk.orders.OrdersCaptureRequest(orderID);
+        captureRequest.requestBody({});
+        const capture = await paypalClient.execute(captureRequest);
+        if (!capture || !capture.result || capture.result.status !== 'COMPLETED') {
+            return res.status(400).json({ error: 'Payment not completed' });
+        }
+
+        // Build local order
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        const totals = computeCheckoutTotals(cart, deliveryOption || 'normal', usePointsFreeDelivery, req.session.user);
+        if (totals.error) return res.status(400).json({ error: totals.error });
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal: totals.subtotal,
+            deliveryOption: deliveryOption || 'normal',
+            deliveryCost: totals.deliveryCost,
+            total: totals.total,
+            paymentMethod: 'paypal',
+            delivery: req.session.delivery || null,
+            membership: {
+                pointsEarned: Math.floor(totals.subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: totals.pointsRedeemed
+            },
+            paymentDetails: {
+                method: 'paypal',
+                paypalOrderId: orderID
+            },
+            status: 'paid',
+            deliveryStatus: 'processing'
+        };
+
+        addOrder(orderBase, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (paypal):', err);
+                return res.status(500).json({ error: 'Could not create local order' });
+            }
+
+            // Deduct stock from products for each item
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart and persist
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Award/redeem membership points
+            try {
+                const user = req.session.user;
+                if (user && uid) {
+                    const earned = Math.floor(totals.subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (totals.pointsRedeemed > 0) {
+                        currentPoints = Math.max(0, currentPoints - totals.pointsRedeemed);
+                    }
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username}.`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            req.session.lastOrderId = created.id;
+            // Return orderId so client can redirect directly to order detail
+            return res.json({ success: true, orderId: created.id, redirect: '/orders/' + encodeURIComponent(created.id) });
+        });
+    } catch (e) {
+        console.error('PayPal order capture error:', e);
+        return res.status(500).json({ error: 'Failed to capture PayPal order' });
+    }
+});
+
 // Payment processing + success redirect
 app.get('/payment-processing', checkAuthenticated, checkNotAdmin, (req, res) => {
     if (!req.session.lastOrderId) {
@@ -2121,29 +2241,7 @@ app.post('/pay/qr/:id/confirm', checkAuthenticated, checkNotAdmin, (req, res) =>
 
 // User Help Center
 app.get('/help-center', checkAuthenticated, checkNotAdmin, (req, res) => {
-    const userId = getUserIdFromSessionUser(req.session.user);
-    getOrdersByUser(userId, (err, orders) => {
-        if (err) {
-            console.error('Failed to load orders for help center:', err);
-            req.flash('error', 'Could not load orders');
-            return res.redirect('/orders');
-        }
-        const eligibleAddressOrders = (orders || []).filter(o => {
-            const status = (o.deliveryStatus || '').toLowerCase();
-            // Treat both "packed" and "item packed" as eligible
-            return status === 'packed' || status === 'item packed';
-        });
-        const refundableOrders = (orders || []).filter(o => (o.status || '').toLowerCase() === 'paid');
-        const errors = req.flash('error');
-        const success = req.flash('success');
-        res.render('help_center', {
-            user: req.session.user,
-            eligibleAddressOrders,
-            refundableOrders,
-            errors,
-            success
-        });
-    });
+    HelpCenterController.renderUserHelpCenter(req, res, inMemory.orders || [], getUserIdFromSessionUser);
 });
 
 app.post('/help-center/address-change', checkAuthenticated, checkNotAdmin, (req, res) => {
@@ -2260,37 +2358,25 @@ app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) =>
 // User: list orders
 app.get('/orders', checkAuthenticated, (req, res) => {
     const uid = getUserIdFromSessionUser(req.session.user);
-    getOrdersByUser(uid, (err, orders) => {
-        // Ignore any error and always show the page
-        if (err) {
-            console.error('Failed to fetch orders:', err);
-        }
-
-        const safeOrders = (orders || []).map(o => {
-            o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-            return o;
+    const orders = OrderModel.getOrdersByUser(inMemory.orders, uid);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
         });
-
-        return res.render('orders', { orders: safeOrders, user: req.session.user });
     });
+    return res.render('orders', { orders: safeOrders, user: req.session.user });
 });
 
 // User: order detail
 app.get('/orders/:id', checkAuthenticated, (req, res) => {
-    const id = req.params.id;
-    const uid = getUserIdFromSessionUser(req.session.user);
-    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
-    if (!o) return res.status(404).send('Order not found');
-    if (String(o.userId) !== String(uid) && !(req.session.user && req.session.user.role === 'admin')) return res.status(403).send('Access denied');
-    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-    res.render('order_detail', { order: o, user: req.session.user });
+    return OrderController.showOrderDetail(req, res, inMemory.orders);
 });
 
 // User: invoice / print view for a single order
 app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
     const id = req.params.id;
     const uid = getUserIdFromSessionUser(req.session.user);
-    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    const o = OrderModel.getOrderById(inMemory.orders, id);
     if (!o) {
         req.flash('error', 'Order not found.');
         return res.redirect('/orders');
@@ -2302,28 +2388,25 @@ app.get('/orders/:id/invoice', checkAuthenticated, (req, res) => {
         return res.redirect('/orders');
     }
 
-    // Ensure estimatedDelivery is present if the template ever needs it
-    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
+    const withDelivery = Object.assign({}, o, {
+        estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
+    });
 
-    res.render('invoice', { order: o, user: req.session.user });
+    res.render('invoice', { order: withDelivery, user: req.session.user });
 });
 
 // Admin: view all orders
 app.get('/admin/orders', checkAuthenticated, checkAdmin, (req, res) => {
-    getAllOrders((err, orders) => {
-        if (err) {
-            console.error('Failed to fetch all orders:', err);
-        }
-
-        const safeOrders = (orders || []).map(o => {
-            o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
-            return o;
+    const orders = OrderModel.getAllOrders(inMemory.orders);
+    const safeOrders = (orders || []).map(o => {
+        return Object.assign({}, o, {
+            estimatedDelivery: estimateDeliveryDate(o.createdAt, o.deliveryOption)
         });
-
-        const errors = req.flash('error');
-        const success = req.flash('success');
-        return res.render('admin_orders', { orders: safeOrders, user: req.session.user, errors, success });
     });
+
+    const errors = req.flash('error');
+    const success = req.flash('success');
+    return res.render('admin_orders', { orders: safeOrders, user: req.session.user, errors, success });
 });
 
 // Admin: update order status

@@ -69,60 +69,96 @@
     </p>
   <% } %>
 
-  <form method="post" action="/checkout">
-    <div class="mb-3 mt-3">
-      <label class="form-label">Delivery option</label>
-      <select name="deliveryOption" class="form-select">
-        <option value="normal">Normal (3 business days) - $10</option>
-        <option value="one-day">One-day (next business day if before 1pm) - $25</option>
-      </select>
-    </div>
+  <div class="mb-3 mt-3">
+    <label class="form-label">Delivery option</label>
+    <select name="deliveryOption" id="deliveryOption" class="form-select">
+      <option value="normal">Normal (3 business days) - $10</option>
+      <option value="one-day">One-day (next business day if before 1pm) - $25</option>
+    </select>
+  </div>
 
-    <div class="mb-3">
-      <label class="form-label">Payment method</label>
-      <select id="paymentMethod" name="paymentMethod" class="form-select">
-        <option value="card">Debit / Credit Card</option>
-        <option value="qr">PayNow QR</option>
-      </select>
-    </div>
-
-    <div id="cardFields">
-      <div class="mb-3">
-        <label class="form-label">Card holder</label>
-        <input name="cardHolder" class="form-control" placeholder="Card holder name" />
-      </div>
-      <div class="mb-3">
-        <label class="form-label">Card number</label>
-        <input name="cardNumber" class="form-control" placeholder="1234 5678 9012 3456" />
-      </div>
-      <div class="row">
-        <div class="col-md-6 mb-3">
-          <label class="form-label">Expiry (MM/YY)</label>
-          <input name="expiry" class="form-control" placeholder="08/25" />
-        </div>
-        <div class="col-md-6 mb-3">
-          <label class="form-label">CVV</label>
-          <input name="cvv" class="form-control" placeholder="123" />
-        </div>
-      </div>
-    </div>
-
-    <button type="submit" class="btn btn-primary">Pay $<%= subtotal.toFixed(2) %> (plus delivery at checkout)</button>
-    <a href="/cart" class="btn btn-secondary ms-2">Back to cart</a>
-  </form>
+  <div id="paypal-buttons" class="mt-3"></div>
+  <div id="paypal-error" class="alert alert-warning mt-3" style="display:none"></div>
+  <a href="/cart" class="btn btn-secondary mt-2">Back to cart</a>
 </div>
 
-<script>
-  document.addEventListener('DOMContentLoaded', function(){
-    const pm = document.getElementById('paymentMethod');
-    const cardFields = document.getElementById('cardFields');
-    function toggle() {
-      if (pm.value === 'card') cardFields.style.display = '';
-      else cardFields.style.display = 'none';
-    }
-    pm.addEventListener('change', toggle);
-    toggle();
-  });
-</script>
+<% if (paypalClientId) { %>
+  <script src="https://www.paypal.com/sdk/js?client-id=<%= paypalClientId %>&currency=<%= paypalCurrency || 'SGD' %>"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      const errorBox = document.getElementById('paypal-error');
+      const deliverySelect = document.getElementById('deliveryOption');
+      const usePointsCheckbox = document.getElementById('usePointsFreeDelivery');
+
+      if (!window.paypal || !window.paypal.Buttons) {
+        errorBox.textContent = 'PayPal SDK failed to load. Check your PAYPAL_CLIENT_ID and internet connection.';
+        errorBox.style.display = '';
+        return;
+      }
+
+      paypal.Buttons({
+        style: { layout: 'vertical', color: 'gold', shape: 'rect', label: 'pay' },
+        createOrder: function(data, actions){
+          const payload = {
+            deliveryOption: deliverySelect.value,
+            usePointsFreeDelivery: usePointsCheckbox && usePointsCheckbox.checked ? '1' : '0'
+          };
+          return fetch('/api/paypal/order/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).then(res => {
+            return res.json().then(d => ({ ok: res.ok, data: d }));
+          }).then(({ ok, data }) => {
+            if (ok && data && data.id) return data.id;
+            throw new Error(data && data.error ? data.error : 'Failed to create order');
+          }).catch(err => {
+            errorBox.textContent = 'Payment Failed, please try again or another payment method.';
+            errorBox.style.display = '';
+            throw err;
+          });
+        },
+        onApprove: function(data, actions){
+          const payload = {
+            orderID: data.orderID,
+            deliveryOption: deliverySelect.value,
+            usePointsFreeDelivery: usePointsCheckbox && usePointsCheckbox.checked ? '1' : '0'
+          };
+          return fetch('/api/paypal/order/capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).then(res => {
+            return res.json().then(d => ({ ok: res.ok, data: d }));
+          }).then(({ ok, data }) => {
+            if (!ok || (data && data.error)) {
+              throw new Error(data && data.error ? data.error : 'Capture failed');
+            }
+            // Prefer direct redirect to order detail if available
+            if (data && data.orderId) {
+              window.location.href = '/orders/' + encodeURIComponent(data.orderId);
+              return;
+            }
+            if (data && data.redirect) {
+              window.location.href = data.redirect;
+              return;
+            }
+            // Fallback to success flow
+            window.location.href = '/payment-success';
+          }).catch(err => {
+            errorBox.textContent = 'Payment Failed, please try again or another payment method.';
+            errorBox.style.display = '';
+          });
+        },
+        onError: function(err){
+          errorBox.textContent = 'Payment Failed, please try again or another payment method.';
+          errorBox.style.display = '';
+        }
+      }).render('#paypal-buttons');
+    });
+  </script>
+<% } else { %>
+  <div class="alert alert-warning mt-3">PayPal is not configured. Please set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET.</div>
+<% } %>
 
 <%- include('partials/footer') %>
