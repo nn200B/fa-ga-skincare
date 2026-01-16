@@ -130,35 +130,37 @@
       "userId": 5,
       "items": [
         {
-          "productId": 3,
-          "productName": "Radiance Vitamin C Serum 15%",
-          "price": "69.00",
+          "productId": 2,
+          "productName": "Green Tea Gel Cleanser",
+          "price": "24.00",
           "quantity": 1,
-          "image": "serum_vitc_15.png"
+          "image": "cleanser_green_tea.png"
         }
       ],
-      "subtotal": 69,
+      "subtotal": 24,
       "deliveryOption": "normal",
       "deliveryCost": 10,
-      "total": 79,
-      "paymentMethod": "card",
+      "total": 34,
+      "paymentMethod": "paypal",
       "delivery": {
-        "fullName": "rety",
-        "street": "retr",
-        "unit": "wret",
-        "postalCode": "werfrew",
-        "note": "rg"
+        "fullName": "justin",
+        "street": "somewhere",
+        "unit": "01-01",
+        "postalCode": "111000",
+        "note": ""
       },
       "status": "paid",
       "paymentDetails": {
-        "method": "card",
-        "holder": "",
-        "last4": "",
-        "cvv": ""
+        "method": "paypal",
+        "paypalOrderId": "7ED61643FJ334105U"
       },
       "deliveryStatus": "processing",
+      "membership": {
+        "pointsEarned": 24,
+        "pointsRedeemed": 0
+      },
       "id": 1,
-      "createdAt": "2025-12-11T05:31:43.175Z"
+      "createdAt": "2026-01-16T09:29:09.034Z"
     }
   ],
   "nextOrderId": 2,
@@ -168,9 +170,9 @@
       "userId": null,
       "role": "admin",
       "type": "order",
-      "message": "New paid order #1 from n.",
+      "message": "New paid order #1 from user1.",
       "link": "/admin/orders",
-      "createdAt": "2025-12-11T05:31:43.184Z",
+      "createdAt": "2026-01-16T09:29:09.037Z",
       "read": false
     },
     {
@@ -180,7 +182,7 @@
       "type": "order",
       "message": "Your order #1 has been placed successfully.",
       "link": "/orders/1",
-      "createdAt": "2025-12-11T05:31:43.185Z",
+      "createdAt": "2026-01-16T09:29:09.037Z",
       "read": false
     }
   ],
@@ -188,5 +190,7 @@
   "refundRequests": [],
   "nextRefundId": 1,
   "addressChangeRequests": [],
-  "nextAddressChangeId": 1
+  "nextAddressChangeId": 1,
+  "users": [],
+  "nextUserId": 1
 }

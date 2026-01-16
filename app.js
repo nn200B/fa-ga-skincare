@@ -1,4 +1,6 @@
 const express = require('express');
+// Load environment variables (e.g., PayPal credentials)
+try { require('dotenv').config(); } catch (e) {}
 const mysql = require('mysql2');
 const session = require('express-session');
 const flash = require('connect-flash');
@@ -7,6 +9,7 @@ const app = express();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -20,6 +23,20 @@ process.on('unhandledRejection', (reason) => {
 });
 
 console.log('Starting GlowAura Skincare App (pid=' + process.pid + ')');
+
+// ---------------- PayPal configuration ----------------
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_ENV = (process.env.PAYPAL_ENVIRONMENT || process.env.PAYPAL_ENV || 'SANDBOX').toLowerCase();
+let PAYPAL_API_BASE = process.env.PAYPAL_API || ((PAYPAL_ENV === 'live' || PAYPAL_ENV === 'production')
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com');
+// Normalize legacy base URLs to the modern api-m endpoints
+try {
+    if (/api\.sandbox\.paypal\.com/i.test(PAYPAL_API_BASE)) PAYPAL_API_BASE = 'https://api-m.sandbox.paypal.com';
+    if (/api\.paypal\.com$/i.test(PAYPAL_API_BASE)) PAYPAL_API_BASE = 'https://api-m.paypal.com';
+} catch (e) {}
+const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
 
 // Set up multer for file uploads
 const storage = multer.diskStorage({
@@ -1906,7 +1923,18 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
     const errors = req.flash('error');
     const success = req.flash('success');
     const membership = buildMembershipSummary(req.session.user || {});
-    res.render('checkout', { cart, subtotal, user: req.session.user, errors, success, delivery: req.session.delivery, membership });
+    res.render('checkout', {
+        cart,
+        subtotal,
+        user: req.session.user,
+        errors,
+        success,
+        delivery: req.session.delivery,
+        membership,
+        paypalClientId: PAYPAL_CLIENT_ID,
+        paypalCurrency: PAYPAL_CURRENCY,
+        paypalEnv: PAYPAL_ENV
+    });
 });
 
 // POST checkout -> choose delivery & payment
@@ -2088,6 +2116,295 @@ app.get('/payment-success', checkAuthenticated, checkNotAdmin, (req, res) => {
     const id = req.session.lastOrderId;
     if (!id) return res.redirect('/orders');
     return res.redirect('/orders/' + encodeURIComponent(id));
+});
+
+// ---------------- PayPal Order APIs ----------------
+function httpRequestJson(urlString, { method = 'GET', headers = {}, body = null } = {}) {
+    return new Promise((resolve, reject) => {
+        try {
+            const u = new URL(urlString);
+            const opts = {
+                method,
+                hostname: u.hostname,
+                path: u.pathname + (u.search || ''),
+                headers
+            };
+            const reqHttps = https.request(opts, (res) => {
+                let data = '';
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
+                    const status = res.statusCode || 0;
+                    const isJson = (res.headers['content-type'] || '').includes('application/json');
+                    if (!data) return resolve({ status, headers: res.headers, data: null });
+                    try {
+                        const parsed = isJson ? JSON.parse(data) : JSON.parse(data);
+                        resolve({ status, headers: res.headers, data: parsed });
+                    } catch (e) {
+                        // non JSON fallback
+                        resolve({ status, headers: res.headers, data: data });
+                    }
+                });
+            });
+            reqHttps.on('error', reject);
+            if (body) reqHttps.write(body);
+            reqHttps.end();
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+async function paypalGetAccessToken() {
+    if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+        throw new Error('PayPal credentials not configured');
+    }
+    const tokenUrl = PAYPAL_API_BASE + '/v1/oauth2/token';
+    const auth = Buffer.from(PAYPAL_CLIENT_ID + ':' + PAYPAL_CLIENT_SECRET).toString('base64');
+    const body = 'grant_type=client_credentials';
+    const { status, data } = await httpRequestJson(tokenUrl, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Basic ' + auth,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(body)
+        },
+        body
+    });
+    if (status < 200 || status >= 300) {
+        throw new Error('PayPal token request failed: ' + status + ' ' + JSON.stringify(data));
+    }
+    return data && data.access_token;
+}
+
+async function paypalCreateOrderRemote(totalValue) {
+    const accessToken = await paypalGetAccessToken();
+    const url = PAYPAL_API_BASE + '/v2/checkout/orders';
+    const payload = JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+            {
+                amount: {
+                    currency_code: PAYPAL_CURRENCY,
+                    value: totalValue
+                }
+            }
+        ]
+    });
+    const { status, data } = await httpRequestJson(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload)
+        },
+        body: payload
+    });
+    if (status < 200 || status >= 300) {
+        throw new Error('PayPal create order failed: ' + status + ' ' + JSON.stringify(data));
+    }
+    return data;
+}
+
+async function paypalCaptureOrderRemote(orderId) {
+    const accessToken = await paypalGetAccessToken();
+    const url = PAYPAL_API_BASE + '/v2/checkout/orders/' + encodeURIComponent(orderId) + '/capture';
+    const { status, data } = await httpRequestJson(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json'
+        },
+        body: ''
+    });
+    if (status < 200 || status >= 300) {
+        throw new Error('PayPal capture failed: ' + status + ' ' + JSON.stringify(data));
+    }
+    return data;
+}
+
+// Create PayPal order using current cart + delivery selection
+app.post('/api/paypal/create-order', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        if (!cart || cart.length === 0) {
+            return res.status(400).json({ error: 'Cart is empty' });
+        }
+        if (!req.session.delivery) {
+            return res.status(400).json({ error: 'Missing delivery details' });
+        }
+
+        const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+
+        const now = new Date();
+        const cutoffHour = 13; // 1pm
+        let deliveryCost = 10;
+        let pointsRedeemed = 0;
+        let finalDeliveryOption = (deliveryOption || 'normal');
+
+        if (finalDeliveryOption === 'one-day') {
+            if (now.getHours() >= cutoffHour) {
+                return res.status(400).json({ error: 'One-day delivery must be ordered before 1pm.' });
+            }
+            deliveryCost = 25;
+        }
+
+        const membership = buildMembershipSummary(req.session.user || {});
+        const wantsFreeDelivery = usePointsFreeDelivery === true || usePointsFreeDelivery === 'on' || usePointsFreeDelivery === '1';
+        if (wantsFreeDelivery && finalDeliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+            deliveryCost = 0;
+            pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+        }
+
+        const total = Number(subtotal) + Number(deliveryCost);
+        const totalStr = total.toFixed(2);
+
+        // Save pending selection in session for capture step
+        req.session.pendingCheckout = {
+            deliveryOption: finalDeliveryOption,
+            deliveryCost,
+            subtotal,
+            pointsRedeemed
+        };
+
+        const created = await paypalCreateOrderRemote(totalStr);
+        return res.json({ id: created && created.id });
+    } catch (e) {
+        console.error('PayPal create-order error:', e);
+        return res.status(500).json({ error: 'Failed to create PayPal order' });
+    }
+});
+
+// Capture PayPal order, then create internal order and redirect
+app.post('/api/paypal/capture-order', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    try {
+        const { orderID } = req.body || {};
+        if (!orderID) return res.status(400).json({ error: 'Missing orderID' });
+
+        const capture = await paypalCaptureOrderRemote(orderID);
+        const status = (capture && capture.status) || '';
+        if (status !== 'COMPLETED') {
+            return res.status(400).json({ error: 'Payment not completed', details: capture });
+        }
+
+        // Build internal order from session data
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        const pending = req.session.pendingCheckout || {};
+        const subtotal = pending.subtotal != null ? Number(pending.subtotal) : cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+        const deliveryCost = Number(pending.deliveryCost || 0);
+        const pointsRedeemed = Number(pending.pointsRedeemed || 0);
+        const deliveryOption = pending.deliveryOption || 'normal';
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal,
+            deliveryOption,
+            deliveryCost,
+            total,
+            paymentMethod: 'paypal',
+            delivery: req.session.delivery || null
+        };
+
+        const toCreate = Object.assign({}, orderBase, {
+            status: 'paid',
+            paymentDetails: {
+                method: 'paypal',
+                paypalOrderId: orderID
+            },
+            deliveryStatus: 'processing',
+            membership: {
+                pointsEarned: Math.floor(subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: pointsRedeemed
+            }
+        });
+
+        // Create order in our store
+        addOrder(toCreate, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (paypal):', err);
+                return res.status(500).json({ error: 'Could not create order' });
+            }
+
+            // Deduct stock
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Update points
+            try {
+                if (req.session.user && uid) {
+                    const earned = Math.floor(subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(req.session.user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (pointsRedeemed > 0) currentPoints = Math.max(0, currentPoints - pointsRedeemed);
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username}.`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            // Cleanup pending selection
+            req.session.pendingCheckout = null;
+
+            req.session.lastOrderId = created.id;
+            return res.json({ success: true, orderId: created.id, redirect: '/orders/' + encodeURIComponent(created.id) });
+        });
+    } catch (e) {
+        console.error('PayPal capture-order error:', e);
+        return res.status(500).json({ error: 'Failed to capture PayPal order' });
+    }
 });
 
 // QR payment page (shows QR and allows simulating confirmation)
