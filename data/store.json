@@ -130,16 +130,17 @@
       "userId": 5,
       "items": [
         {
-          "productId": 2,
-          "productName": "Green Tea Gel Cleanser",
-          "price": "24.00",
+          "productId": 3,
+          "productName": "Radiance Vitamin C Serum 15%",
+          "price": "69.00",
           "quantity": 1,
-          "image": "cleanser_green_tea.png"
+          "image": "serum_vitc_15.png"
         }
       ],
-      "subtotal": 24,
+      "subtotal": 69,
       "deliveryOption": "normal",
       "deliveryCost": 10,
+<<<<<<< HEAD
       "total": 34,
       "paymentMethod": "paypal",
       "delivery": {
@@ -148,6 +149,16 @@
         "unit": "01-01",
         "postalCode": "111000",
         "note": ""
+=======
+      "total": 79,
+      "paymentMethod": "card",
+      "delivery": {
+        "fullName": "axscdsfdg",
+        "street": "dcsfvbghg",
+        "unit": "cdsfdgf",
+        "postalCode": "cdvfdgxz",
+        "note": "csvdbf"
+>>>>>>> b4c15fe (Restore deleted controllers/models; add points column to users SQL; render admin users on DB error)
       },
       "status": "paid",
       "paymentDetails": {
@@ -156,11 +167,15 @@
       },
       "deliveryStatus": "processing",
       "membership": {
-        "pointsEarned": 24,
+        "pointsEarned": 69,
         "pointsRedeemed": 0
       },
       "id": 1,
+<<<<<<< HEAD
       "createdAt": "2026-01-16T09:29:09.034Z"
+=======
+      "createdAt": "2026-01-19T04:20:18.301Z"
+>>>>>>> b4c15fe (Restore deleted controllers/models; add points column to users SQL; render admin users on DB error)
     }
   ],
   "nextOrderId": 2,
@@ -172,7 +187,11 @@
       "type": "order",
       "message": "New paid order #1 from user1.",
       "link": "/admin/orders",
+<<<<<<< HEAD
       "createdAt": "2026-01-16T09:29:09.037Z",
+=======
+      "createdAt": "2026-01-19T04:20:18.306Z",
+>>>>>>> b4c15fe (Restore deleted controllers/models; add points column to users SQL; render admin users on DB error)
       "read": false
     },
     {
@@ -182,7 +201,11 @@
       "type": "order",
       "message": "Your order #1 has been placed successfully.",
       "link": "/orders/1",
+<<<<<<< HEAD
       "createdAt": "2026-01-16T09:29:09.037Z",
+=======
+      "createdAt": "2026-01-19T04:20:18.307Z",
+>>>>>>> b4c15fe (Restore deleted controllers/models; add points column to users SQL; render admin users on DB error)
       "read": false
     }
   ],

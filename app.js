@@ -708,14 +708,15 @@ app.get('/inventory', checkAuthenticated, checkAdmin, (req, res) => {
 // Admin user management
 app.get('/admin/users', checkAuthenticated, checkAdmin, (req, res) => {
     getAllUsers((err, users) => {
+        const errors = req.flash('error') || [];
+        const success = req.flash('success') || [];
         if (err) {
             console.error('Failed to load users for admin:', err);
-            req.flash('error', 'Could not load users.');
-            return res.redirect('/inventory');
+            errors.push('Could not load users: ' + ((err && err.message) || 'Database error'));
+            // Render the admin users page with the error instead of redirecting to inventory
+            return res.render('admin_users', { user: req.session.user, users: [], errors, success });
         }
-        const errors = req.flash('error');
-        const success = req.flash('success');
-        res.render('admin_users', { user: req.session.user, users: users || [], errors, success });
+        return res.render('admin_users', { user: req.session.user, users: users || [], errors, success });
     });
 });
 
