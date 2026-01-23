@@ -77,52 +77,89 @@
         <option value="one-day">One-day (next business day if before 1pm) - $25</option>
       </select>
     </div>
-
     <div class="mb-3">
       <label class="form-label">Payment method</label>
-      <select id="paymentMethod" name="paymentMethod" class="form-select">
-        <option value="card">Debit / Credit Card</option>
-        <option value="qr">PayNow QR</option>
+      <select id="paymentMethod" name="paymentMethod" class="form-select" disabled>
+        <option value="paypal">PayPal</option>
       </select>
     </div>
 
-    <div id="cardFields">
-      <div class="mb-3">
-        <label class="form-label">Card holder</label>
-        <input name="cardHolder" class="form-control" placeholder="Card holder name" />
-      </div>
-      <div class="mb-3">
-        <label class="form-label">Card number</label>
-        <input name="cardNumber" class="form-control" placeholder="1234 5678 9012 3456" />
-      </div>
-      <div class="row">
-        <div class="col-md-6 mb-3">
-          <label class="form-label">Expiry (MM/YY)</label>
-          <input name="expiry" class="form-control" placeholder="08/25" />
-        </div>
-        <div class="col-md-6 mb-3">
-          <label class="form-label">CVV</label>
-          <input name="cvv" class="form-control" placeholder="123" />
-        </div>
-      </div>
+    <div id="paypal-button-container"></div>
+    <div class="mt-3">
+      <a href="/cart" class="btn btn-secondary">Back to cart</a>
     </div>
-
-    <button type="submit" class="btn btn-primary">Pay $<%= subtotal.toFixed(2) %> (plus delivery at checkout)</button>
-    <a href="/cart" class="btn btn-secondary ms-2">Back to cart</a>
   </form>
 </div>
 
 <script>
-  document.addEventListener('DOMContentLoaded', function(){
-    const pm = document.getElementById('paymentMethod');
-    const cardFields = document.getElementById('cardFields');
-    function toggle() {
-      if (pm.value === 'card') cardFields.style.display = '';
-      else cardFields.style.display = 'none';
+  // Show failure alert if redirected with ?paymentFailed=1
+  (function(){
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('paymentFailed') === '1') {
+      alert('Payment Failed, please try again or another payment method.');
+      // remove the param from the URL without reloading
+      if (window.history && window.history.replaceState) {
+        params.delete('paymentFailed');
+        const cleaned = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '');
+        window.history.replaceState({}, '', cleaned);
+      }
     }
-    pm.addEventListener('change', toggle);
-    toggle();
-  });
+  })();
 </script>
+
+<% if (typeof paypalClientId === 'string' && paypalClientId) { %>
+  <script src="https://www.paypal.com/sdk/js?client-id=<%= paypalClientId %>&currency=<%= paypalCurrency || 'SGD' %>&intent=capture"></script>
+  <script>
+    (function(){
+      const deliverySelect = document.querySelector('select[name="deliveryOption"]');
+      const usePointsEl = document.getElementById('usePointsFreeDelivery');
+      const container = document.getElementById('paypal-button-container');
+      if (!(window.paypal && container)) return;
+
+      paypal.Buttons({
+        createOrder: function(data, actions) {
+          const deliveryOption = deliverySelect ? deliverySelect.value : 'normal';
+          const usePointsFreeDelivery = !!(usePointsEl && usePointsEl.checked);
+          return fetch('/api/paypal/create-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deliveryOption, usePointsFreeDelivery })
+          }).then(function(res){ return res.json(); })
+            .then(function(json){
+              if (!json || !json.id) throw new Error('Failed to create order');
+              return json.id;
+            }).catch(function(e){
+              console.error('createOrder error', e);
+              window.location.href = '/checkout?paymentFailed=1';
+            });
+        },
+        onApprove: function(data, actions) {
+          const orderID = data.orderID;
+          return fetch('/api/paypal/capture-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderID })
+          }).then(function(res){ return res.json(); })
+            .then(function(json){
+              if (!json || !json.success) throw new Error('Capture failed');
+              window.location.href = json.redirect || ('/orders/' + (json.orderId || ''));
+            }).catch(function(e){
+              console.error('capture error', e);
+              window.location.href = '/checkout?paymentFailed=1';
+            });
+        },
+        onError: function(err){
+          console.error('PayPal error', err);
+          window.location.href = '/checkout?paymentFailed=1';
+        },
+        onCancel: function(){
+          // User cancelled, just return to checkout silently
+        }
+      }).render('#paypal-button-container');
+    })();
+  </script>
+<% } else { %>
+  <div class="alert alert-warning mt-3">PayPal is not configured. Please set PAYPAL_CLIENT_ID.</div>
+<% } %>
 
 <%- include('partials/footer') %>
