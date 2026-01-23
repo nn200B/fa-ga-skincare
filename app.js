@@ -640,7 +640,7 @@ function getUserById(id, cb){
 
 // Helper: get all users (for admin user management)
 function getAllUsers(cb){
-    connection.query('SELECT id, username, email, role, points FROM users ORDER BY id ASC', (err, rows) => {
+    connection.query('SELECT id, username, email, role, points, contact FROM users ORDER BY id ASC', (err, rows) => {
         if (err) return cb(err);
         const list = (rows || []).map(r => {
             const u = Object.assign({}, r);
@@ -716,6 +716,56 @@ app.get('/admin/users', checkAuthenticated, checkAdmin, (req, res) => {
         const errors = req.flash('error');
         const success = req.flash('success');
         res.render('admin_users', { user: req.session.user, users: users || [], errors, success });
+    });
+});
+
+// Admin update user (role, contact). Admin cannot change their own role.
+app.post('/admin/users/:id/update', checkAuthenticated, checkAdmin, (req, res) => {
+    const targetId = req.params.id;
+    const { role, contact } = req.body || {};
+    const selfId = getUserIdFromSessionUser(req.session.user);
+    if (!targetId) {
+        req.flash('error', 'Missing user id.');
+        return res.redirect('/admin/users');
+    }
+    // Validate role if provided
+    const newRole = (role || '').trim();
+    if (newRole && newRole !== 'admin' && newRole !== 'user') {
+        req.flash('error', 'Invalid role.');
+        return res.redirect('/admin/users');
+    }
+
+    // Prevent changing own role
+    if (newRole && String(targetId) === String(selfId)) {
+        req.flash('error', 'You cannot change your own role.');
+        return res.redirect('/admin/users');
+    }
+
+    // Build dynamic update
+    const fields = [];
+    const params = [];
+    if (newRole) {
+        fields.push('role = ?');
+        params.push(newRole);
+    }
+    if (typeof contact !== 'undefined') {
+        fields.push('contact = ?');
+        params.push(contact);
+    }
+    if (!fields.length) {
+        req.flash('error', 'No changes to update.');
+        return res.redirect('/admin/users');
+    }
+    params.push(targetId);
+    const sql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
+    connection.query(sql, params, (err) => {
+        if (err) {
+            console.error('Failed to update user:', err);
+            req.flash('error', 'Could not update user.');
+        } else {
+            req.flash('success', 'User updated.');
+        }
+        return res.redirect('/admin/users');
     });
 });
 

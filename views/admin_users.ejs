@@ -30,6 +30,7 @@
             <th scope="col">Name</th>
             <th scope="col">Email</th>
             <th scope="col">Role</th>
+            <th scope="col">Contact</th>
             <th scope="col">Tier</th>
             <th scope="col">Points</th>
             <th scope="col" class="text-end">Actions</th>
@@ -45,7 +46,22 @@
                 <td><%= u.username %></td>
                 <td><%= u.email %></td>
                 <td>
-                  <span class="badge <%= u.role === 'admin' ? 'bg-dark' : 'bg-secondary' %>"><%= u.role %></span>
+                  <form class="d-flex align-items-center gap-2" action="/admin/users/<%= u.id %>/update" method="POST">
+                    <select name="role" class="form-select form-select-sm" style="max-width:140px" <%= (user && String(user.id) === String(u.id) ? 'disabled' : '') %>>
+                      <option value="user" <%= u.role === 'user' ? 'selected' : '' %>>user</option>
+                      <option value="admin" <%= u.role === 'admin' ? 'selected' : '' %>>admin</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-primary" <%= (user && String(user.id) === String(u.id) ? 'disabled' : '') %>>Save</button>
+                  </form>
+                  <% if (user && String(user.id) === String(u.id)) { %>
+                    <div class="small text-muted">You cannot change your own role.</div>
+                  <% } %>
+                </td>
+                <td>
+                  <form class="d-flex align-items-center gap-2" action="/admin/users/<%= u.id %>/update" method="POST">
+                    <input type="text" name="contact" class="form-control form-control-sm" style="max-width:200px" value="<%= u.contact || '' %>" placeholder="Contact number" />
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                  </form>
                 </td>
                 <td>
                   <span class="admin-users-tier-pill tier-<%= (u.membership && u.membership.tierName || 'Bronze').toLowerCase() %>">
