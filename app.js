@@ -10,6 +10,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -87,6 +89,20 @@ if (!SKIP_DB) {
             `;
             connection.query(createCategoriesTable, (err) => {
                 if (err) console.error('Failed to ensure categories table:', err);
+            });
+
+            // Ensure 2FA columns exist on users table (ignore errors if they already exist)
+            const addTwoFaColumns = `
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(64) NULL,
+                ADD COLUMN IF NOT EXISTS twofa_enabled TINYINT(1) NOT NULL DEFAULT 0;
+            `;
+            connection.query(addTwoFaColumns, (err) => {
+                if (err) {
+                    // Fallback for MySQL versions without IF NOT EXISTS
+                    connection.query('ALTER TABLE users ADD COLUMN totp_secret VARCHAR(64) NULL', () => {});
+                    connection.query('ALTER TABLE users ADD COLUMN twofa_enabled TINYINT(1) NOT NULL DEFAULT 0', () => {});
+                }
             });
     });
 } else {
@@ -818,18 +834,42 @@ app.post('/register', validateRegistration, (req, res) => {
             req.flash('error', 'Registration failed. Try a different email or contact admin.');
             return res.redirect('/register');
         }
-        console.log(result);
-        req.flash('success', 'Registration successful! Please log in.');
-        res.redirect('/login');
+        const newUserId = result.insertId;
+        // Generate TOTP secret and store
+        const secret = speakeasy.generateSecret({ length: 20, name: `GlowAura (${username})` });
+        const otpauthUrl = secret.otpauth_url;
+        connection.query('UPDATE users SET totp_secret = ?, twofa_enabled = 1 WHERE id = ?', [secret.base32, newUserId], (uErr) => {
+            if (uErr) console.error('Failed to store 2FA secret:', uErr);
+            // Store setup info in session and redirect to setup page to show QR
+            req.session.totpSetup = { userId: newUserId, otpauthUrl };
+            return res.redirect('/setup-2fa');
+        });
     });
 });
 
 app.get('/login', (req, res) => {
     res.render('login', { messages: req.flash('success'), errors: req.flash('error') });
 });
+// Show QR for 2FA setup after registration
+app.get('/setup-2fa', (req, res) => {
+    const setup = req.session.totpSetup;
+    if (!setup || !setup.otpauthUrl) {
+        return res.render('setup_2fa', { error: 'No 2FA setup data found.', qrDataUrl: null, secretBase32: null });
+    }
+    QRCode.toDataURL(setup.otpauthUrl, { errorCorrectionLevel: 'M' }, (err, url) => {
+        if (err) {
+            return res.render('setup_2fa', { error: 'Failed to generate QR code.', qrDataUrl: null, secretBase32: null });
+        }
+        // Retrieve secret for display from DB
+        connection.query('SELECT totp_secret FROM users WHERE id = ?', [setup.userId], (e, rows) => {
+            const base32 = rows && rows[0] && rows[0].totp_secret ? rows[0].totp_secret : null;
+            res.render('setup_2fa', { error: null, qrDataUrl: url, secretBase32: base32 });
+        });
+    });
+});
 
 app.post('/login', (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, totp } = req.body;
 
     // Validate email and password
     if (!email || !password) {
@@ -846,8 +886,16 @@ app.post('/login', (req, res) => {
         }
 
         if (results.length > 0) {
+            const dbUser = results[0];
+            if (dbUser.twofa_enabled) {
+                const isValid = speakeasy.totp.verify({ secret: dbUser.totp_secret, encoding: 'base32', token: (totp || '').trim(), window: 1 });
+                if (!isValid) {
+                    req.flash('error', 'Invalid or missing 2FA code.');
+                    return res.redirect('/login');
+                }
+            }
             // Successful login
-            req.session.user = results[0];
+            req.session.user = dbUser;
 
             // load persisted cart for this user
             const uid = getUserIdFromSessionUser(req.session.user);

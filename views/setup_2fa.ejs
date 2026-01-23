@@ -1,0 +1,25 @@
+<%- include('partials/header', { title: 'Set up 2FA' }) %>
+
+<div class="container py-5">
+  <h2>Secure your account with Google Authenticator</h2>
+  <% if (error) { %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% } %>
+  <% if (qrDataUrl) { %>
+    <p class="text-muted">Scan this QR in Google Authenticator, then use the 6‑digit code to log in.</p>
+    <div class="d-flex align-items-center gap-4 mt-3">
+      <img src="<%= qrDataUrl %>" alt="Authenticator QR" class="border rounded p-2" style="width:220px;height:220px;" />
+      <div>
+        <p class="small text-muted">If you can't scan, use this setup key:</p>
+        <code class="d-block"><%= secretBase32 %></code>
+      </div>
+    </div>
+    <div class="mt-4">
+      <a class="btn btn-primary" href="/login">Proceed to login</a>
+    </div>
+  <% } else { %>
+    <div class="alert alert-warning">No setup data found. Please register again.</div>
+  <% } %>
+</div>
+
+<%- include('partials/footer') %>
