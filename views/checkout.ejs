@@ -79,12 +79,22 @@
     </div>
     <div class="mb-3">
       <label class="form-label">Payment method</label>
-      <select id="paymentMethod" name="paymentMethod" class="form-select" disabled>
-        <option value="paypal">PayPal</option>
+      <!-- Decouple select name; use hidden input for actual submission value -->
+      <select id="paymentMethod" name="pmSelect" class="form-select">
+        <option value="paypal" selected>PayPal</option>
+        <option value="nets">NETS QR Code</option>
       </select>
     </div>
 
     <div id="paypal-button-container"></div>
+    <div id="nets-button-container" class="mt-2" style="display:none;">
+      <button type="submit" class="btn btn-dark">Pay with NETS QR</button>
+    </div>
+
+    <!-- Sync membership checkbox value into form for non-PayPal flows -->
+    <input type="hidden" id="usePointsFreeDeliveryHidden" name="usePointsFreeDelivery" value="">
+    <!-- Hidden payment method used for submission -->
+    <input type="hidden" id="paymentMethodHidden" name="paymentMethod" value="paypal">
     <div class="mt-3">
       <a href="/cart" class="btn btn-secondary">Back to cart</a>
     </div>
@@ -104,6 +114,37 @@
         window.history.replaceState({}, '', cleaned);
       }
     }
+  })();
+
+  // Toggle payment UIs and keep membership checkbox in sync for form submits
+  (function(){
+    const methodSelect = document.getElementById('paymentMethod');
+    const paypalContainer = document.getElementById('paypal-button-container');
+    const netsContainer = document.getElementById('nets-button-container');
+    const usePointsEl = document.getElementById('usePointsFreeDelivery');
+    const hiddenUsePoints = document.getElementById('usePointsFreeDeliveryHidden');
+    const hiddenPayment = document.getElementById('paymentMethodHidden');
+
+    function syncUsePoints(){
+      if (!hiddenUsePoints) return;
+      hiddenUsePoints.value = (usePointsEl && usePointsEl.checked) ? '1' : '';
+    }
+    syncUsePoints();
+    if (usePointsEl) usePointsEl.addEventListener('change', syncUsePoints);
+
+    function toggleUI(){
+      const v = methodSelect ? methodSelect.value : 'paypal';
+      if (hiddenPayment) hiddenPayment.value = v;
+      if (v === 'nets') {
+        netsContainer && (netsContainer.style.display = 'block');
+        paypalContainer && (paypalContainer.style.display = 'none');
+      } else {
+        netsContainer && (netsContainer.style.display = 'none');
+        paypalContainer && (paypalContainer.style.display = 'block');
+      }
+    }
+    if (methodSelect) methodSelect.addEventListener('change', toggleUI);
+    toggleUI();
   })();
 </script>
 

@@ -261,4 +261,18 @@
     });
   });
 </script>
+<script>
+  // Show failure prompt if redirected with ?paymentFailed=1
+  (function(){
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('paymentFailed') === '1') {
+      alert('Payment was unsuccessful, please try again or another payment method.');
+      if (window.history && window.history.replaceState) {
+        params.delete('paymentFailed');
+        const cleaned = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '');
+        window.history.replaceState({}, '', cleaned);
+      }
+    }
+  })();
+</script>
 <%- include('partials/footer') %>

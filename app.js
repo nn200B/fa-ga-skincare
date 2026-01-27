@@ -12,6 +12,8 @@ const crypto = require('crypto');
 const https = require('https');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
+const axios = require('axios');
+const netsService = require('./services/nets');
 
 // Improve observability: catch top-level errors and log them so we can see why the process exits.
 process.on('uncaughtException', (err) => {
@@ -2086,7 +2088,7 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
             delivery: req.session.delivery || null
         };
 
-        // QR branch
+        // QR branch (legacy in-app QR)
         if (paymentMethod === 'qr') {
                 const temp = Object.assign({}, orderBase, {
                         status: 'pending_payment',
@@ -2102,6 +2104,26 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
                         return res.redirect('/pay/qr/' + encodeURIComponent(created.id));
                 });
                 return;
+        }
+
+        // NETS QR branch
+        if (paymentMethod === 'nets') {
+            const temp = Object.assign({}, orderBase, {
+            status: 'pending_payment',
+            deliveryStatus: 'processing'
+            });
+            addOrder(temp, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (NETS):', err);
+                req.flash('error', 'Could not create order. Please try again.');
+                return res.redirect('/checkout');
+            }
+            // Remember pending order for success confirmation step
+            req.session.recentOrderId = created.id;
+            req.session.netsPending = true;
+            return res.redirect('/pay/nets/' + encodeURIComponent(created.id));
+            });
+            return;
         }
 
         // Card branch (default) - always proceed and then redirect
@@ -2214,6 +2236,129 @@ app.get('/payment-success', checkAuthenticated, checkNotAdmin, (req, res) => {
     const id = req.session.lastOrderId;
     if (!id) return res.redirect('/orders');
     return res.redirect('/orders/' + encodeURIComponent(id));
+});
+
+// ---------------- NETS QR Routes ----------------
+// Show NETS QR using services/nets with calculated total
+app.get('/pay/nets/:id', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const id = req.params.id;
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    if (!o) return res.status(404).send('Order not found');
+    // ensure total is available and accurate
+    const total = Number(o.total || 0);
+    // Pass cart total to service for QR generation
+    try {
+        req.body = req.body || {};
+        req.body.cartTotal = total.toFixed(2);
+    } catch (e) {}
+    return netsService.generateQrCode(req, res);
+});
+
+// Render success status page (auto continues to finalize order)
+app.get('/nets-qr/success', checkAuthenticated, checkNotAdmin, (req, res) => {
+    res.render('netsTxnSuccessStatus', { message: 'Transaction Successful' });
+});
+
+// Finalize pending NETS order and redirect to order detail
+app.post('/order/confirm', checkAuthenticated, checkNotAdmin, (req, res) => {
+    const id = req.session.recentOrderId;
+    if (!id) return res.redirect('/orders');
+    const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
+    if (!o) return res.redirect('/orders');
+    // mark as paid and update delivery estimate
+    o.status = 'paid';
+    if (!o.history) o.history = [];
+    o.history.push({ status: 'paid', at: new Date().toISOString() });
+    o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
+    o.new = true;
+    // clear cart
+    req.session.cart = [];
+    const uid = getUserIdFromSessionUser(req.session.user);
+    if (uid) saveCartToDB(uid, req.session.cart, () => {});
+    persistStore(() => {
+        res.redirect('/orders/' + encodeURIComponent(id));
+    });
+});
+
+// Render failure status page (auto redirects back to cart)
+app.get('/nets-qr/fail', checkAuthenticated, checkNotAdmin, (req, res) => {
+    res.render('netsTxnFailStatus', { message: 'Transaction Failed' });
+});
+
+// Redirect user to cart and show failure prompt
+app.get('/nets-qr/fail/redirect', checkAuthenticated, checkNotAdmin, (req, res) => {
+    // Use a query param so cart page can show a prompt
+    res.redirect('/cart?paymentFailed=1');
+});
+
+// ---------------- SSE: NETS Payment Status ----------------
+// Endpoint to stream real-time payment status updates via Server-Sent Events (SSE)
+app.get('/sse/payment-status/:txnRetrievalRef', async (req, res) => {
+    res.set({
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    });
+
+    const txnRetrievalRef = req.params.txnRetrievalRef;
+    let pollCount = 0;
+    const maxPolls = 60; // 5 minutes if polling every 5s
+    let frontendTimeoutStatus = 0;
+
+    const interval = setInterval(async () => {
+        pollCount++;
+
+        try {
+            // Call the NETS query API
+            const response = await axios.post(
+                'https://sandbox.nets.openapipaas.com/api/v1/common/payments/nets-qr/query',
+                { txn_retrieval_ref: txnRetrievalRef, frontend_timeout_status: frontendTimeoutStatus },
+                {
+                    headers: {
+                        'api-key': process.env.API_KEY,
+                        'project-id': process.env.PROJECT_ID,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            console.log('Polling response:', response.data);
+            // Send the full response to the frontend
+            res.write(`data: ${JSON.stringify(response.data)}\n\n`);
+
+            const resData = response.data.result && response.data.result.data ? response.data.result.data : {};
+
+            // Decide when to end polling and close the connection
+            // Check if payment is successful
+            if (resData.response_code == '00' && resData.txn_status === 1) {
+                // Payment success: send a success message
+                res.write(`data: ${JSON.stringify({ success: true })}\n\n`);
+                clearInterval(interval);
+                res.end();
+            } else if (frontendTimeoutStatus == 1 && resData && (resData.response_code !== '00' || resData.txn_status === 2)) {
+                // Payment failure: send a fail message
+                res.write(`data: ${JSON.stringify({ fail: true, ...resData })}\n\n`);
+                clearInterval(interval);
+                res.end();
+            }
+        } catch (err) {
+            clearInterval(interval);
+            res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+            res.end();
+        }
+
+        // Timeout
+        if (pollCount >= maxPolls) {
+            clearInterval(interval);
+            frontendTimeoutStatus = 1;
+            res.write(`data: ${JSON.stringify({ fail: true, error: 'Timeout' })}\n\n`);
+            res.end();
+        }
+    }, 5000);
+
+    req.on('close', () => {
+        clearInterval(interval);
+    });
 });
 
 // ---------------- PayPal Order APIs ----------------

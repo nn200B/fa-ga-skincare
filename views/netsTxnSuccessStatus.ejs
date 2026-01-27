@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Transaction Successful</title>
+</head>
+<body>
+    <h1><%= message %></h1>
+    <p>Thank you for your payment!</p>
+    <img height="auto" width="20%" src="../images/greenTick.png" /><br />
+
+    <!-- Auto-redirect after 2 seconds by submitting order confirmation -->
+    <form id="confirmOrderForm" action="/order/confirm" method="POST" style="display:none;"></form>
+    <script>
+        // After showing success status for 2 seconds, finalize order and show receipt
+        setTimeout(function () {
+            const form = document.getElementById('confirmOrderForm');
+            if (form) form.submit();
+        }, 2000);
+    </script>
+</body>
+</html>
