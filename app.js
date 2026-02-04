@@ -1562,7 +1562,7 @@ app.get('/admin/help-center', checkAuthenticated, checkAdmin, (req, res) => {
 });
 
 // Admin takes decision on refund: approve or reject
-app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmin, (req, res) => {
+app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmin, async (req, res) => {
     const refundId = req.params.id;
     const decision = (req.body.decision || '').toLowerCase();
     if (decision !== 'approve' && decision !== 'reject') {
@@ -1570,49 +1570,137 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
         return res.redirect('/admin/help-center');
     }
     const newStatus = decision === 'approve' ? 'approved' : 'rejected';
-    updateRefundStatus(refundId, newStatus, (err, r) => {
-        if (err) {
-            console.error('Failed to update refund status:', err);
-            req.flash('error', 'Could not update refund request.');
-        } else {
-            // When approved, mark order as refunded/cancelled and remove from active orders
-            if (newStatus === 'approved') {
-                const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
-                let removedOrder = null;
-                if (idx !== -1) {
-                    removedOrder = inMemory.orders.splice(idx, 1)[0];
+    
+    try {
+        const r = (inMemory.refundRequests || []).find(x => String(x.id) === String(refundId));
+        if (!r) {
+            req.flash('error', 'Refund request not found.');
+            return res.redirect('/admin/help-center');
+        }
+
+        // When approved, process PayPal refund if payment was via PayPal
+        if (newStatus === 'approved') {
+            const order = (inMemory.orders || []).find(o => String(o.id) === String(r.orderId));
+            
+            if (order) {
+                // Check if payment was made via PayPal
+                const paymentMethod = order.paymentMethod || (order.paymentDetails && order.paymentDetails.method);
+                const paypalOrderId = order.paymentDetails && order.paymentDetails.paypalOrderId;
+                
+                if (paymentMethod === 'paypal' && paypalOrderId) {
+                    try {
+                        console.log('Processing PayPal refund for order:', paypalOrderId);
+                        
+                        // First, get the capture ID from the PayPal order
+                        const accessToken = await paypalGetAccessToken();
+                        const orderDetailsUrl = PAYPAL_API_BASE + '/v2/checkout/orders/' + encodeURIComponent(paypalOrderId);
+                        const { status: orderStatus, data: orderData } = await httpRequestJson(orderDetailsUrl, {
+                            method: 'GET',
+                            headers: {
+                                'Authorization': 'Bearer ' + accessToken,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        if (orderStatus >= 200 && orderStatus < 300 && orderData) {
+                            // Extract capture ID from the order details
+                            const captureId = orderData.purchase_units && 
+                                            orderData.purchase_units[0] && 
+                                            orderData.purchase_units[0].payments && 
+                                            orderData.purchase_units[0].payments.captures && 
+                                            orderData.purchase_units[0].payments.captures[0] && 
+                                            orderData.purchase_units[0].payments.captures[0].id;
+
+                            if (captureId) {
+                                // Process the refund with PayPal (full refund)
+                                const refundAmount = order.total ? String(Number(order.total).toFixed(2)) : null;
+                                const refundData = await paypalRefundCaptureRemote(
+                                    captureId, 
+                                    refundAmount, 
+                                    PAYPAL_CURRENCY
+                                );
+                                
+                                console.log('PayPal refund processed successfully:', refundData);
+                                
+                                // Store refund details in the request
+                                r.paypalRefundId = refundData.id;
+                                r.paypalRefundStatus = refundData.status;
+                                r.refundedAmount = refundAmount;
+                                
+                                req.flash('success', `Refund approved and processed via PayPal. Refund ID: ${refundData.id}`);
+                            } else {
+                                console.warn('Could not find capture ID for PayPal order:', paypalOrderId);
+                                req.flash('warning', 'Refund approved locally, but PayPal capture ID not found. Please process refund manually in PayPal dashboard.');
+                            }
+                        } else {
+                            console.warn('Failed to get PayPal order details:', orderStatus, orderData);
+                            req.flash('warning', 'Refund approved locally, but could not retrieve PayPal order details. Please process refund manually.');
+                        }
+                    } catch (paypalError) {
+                        console.error('PayPal refund error:', paypalError);
+                        req.flash('error', `Refund approved locally, but PayPal refund failed: ${paypalError.message}. Please process manually in PayPal dashboard.`);
+                        r.paypalRefundError = paypalError.message;
+                    }
+                } else {
+                    // Non-PayPal order (QR/NETS) - just mark as refunded locally
+                    req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal payment - process refund manually if needed)`);
                 }
 
-                // Optional: keep a history array on the refund request
+                // Remove order from active orders list
+                const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
+                if (idx !== -1) {
+                    inMemory.orders.splice(idx, 1);
+                }
+
+                // Add history to refund request
                 if (!r.history) r.history = [];
-                r.history.push({ status: 'order cancelled and refund accepted', at: new Date().toISOString() });
-
-                persistStore(() => {
-                    req.flash('success', `Refund accepted and order #${r.orderId} cancelled.`);
-                });
-
-                // Notify user about refund decision
-                addNotification({
-                    role: 'user',
-                    userId: r.userId,
-                    type: 'refund',
-                    message: `Your order #${r.orderId} has been cancelled and refund accepted.`,
-                    link: '/notifications'
-                });
-            } else {
-                req.flash('success', `Refund request #${refundId} rejected.`);
-                // Notify user about refund rejection
-                addNotification({
-                    role: 'user',
-                    userId: r.userId,
-                    type: 'refund',
-                    message: `Your refund request for order #${r.orderId} has been rejected.`,
-                    link: '/orders'
+                r.history.push({ 
+                    status: 'order cancelled and refund accepted', 
+                    at: new Date().toISOString() 
                 });
             }
+
+            // Update refund status
+            updateRefundStatus(refundId, newStatus, (err) => {
+                if (err) {
+                    console.error('Failed to update refund status:', err);
+                }
+                persistStore(() => {});
+            });
+
+            // Notify user about refund decision
+            addNotification({
+                role: 'user',
+                userId: r.userId,
+                type: 'refund',
+                message: `Your order #${r.orderId} has been cancelled and refund accepted.`,
+                link: '/notifications'
+            });
+        } else {
+            // Rejected
+            updateRefundStatus(refundId, newStatus, (err) => {
+                if (err) {
+                    console.error('Failed to update refund status:', err);
+                }
+            });
+            
+            req.flash('success', `Refund request #${refundId} rejected.`);
+            
+            // Notify user about refund rejection
+            addNotification({
+                role: 'user',
+                userId: r.userId,
+                type: 'refund',
+                message: `Your refund request for order #${r.orderId} has been rejected.`,
+                link: '/orders'
+            });
         }
-        return res.redirect('/admin/help-center');
-    });
+    } catch (err) {
+        console.error('Error processing refund decision:', err);
+        req.flash('error', 'An error occurred while processing the refund decision.');
+    }
+    
+    return res.redirect('/admin/help-center');
 });
 
 // Admin takes decision on address change: approve or reject
@@ -2465,6 +2553,33 @@ async function paypalCaptureOrderRemote(orderId) {
     return data;
 }
 
+async function paypalRefundCaptureRemote(captureId, amount, currency) {
+    const accessToken = await paypalGetAccessToken();
+    const url = PAYPAL_API_BASE + '/v2/payments/captures/' + encodeURIComponent(captureId) + '/refund';
+    
+    // If amount and currency are provided, do partial refund, otherwise full refund
+    const payload = amount && currency ? JSON.stringify({
+        amount: {
+            value: amount,
+            currency_code: currency
+        }
+    }) : '{}';
+    
+    const { status, data } = await httpRequestJson(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload)
+        },
+        body: payload
+    });
+    if (status < 200 || status >= 300) {
+        throw new Error('PayPal refund failed: ' + status + ' ' + JSON.stringify(data));
+    }
+    return data;
+}
+
 // Create PayPal order using current cart + delivery selection
 app.post('/api/paypal/create-order', checkAuthenticated, checkNotAdmin, async (req, res) => {
     try {
@@ -2647,6 +2762,108 @@ app.post('/api/paypal/capture-order', checkAuthenticated, checkNotAdmin, async (
     } catch (e) {
         console.error('PayPal capture-order error:', e);
         return res.status(500).json({ error: 'Failed to capture PayPal order' });
+    }
+});
+
+// API endpoint to process PayPal refund for a specific order
+app.post('/api/paypal/refund-order', checkAuthenticated, checkAdmin, async (req, res) => {
+    try {
+        const { orderId, amount, note } = req.body || {};
+        
+        if (!orderId) {
+            return res.status(400).json({ error: 'Missing orderId' });
+        }
+
+        // Find the order
+        const order = (inMemory.orders || []).find(o => String(o.id) === String(orderId));
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        // Check if payment was made via PayPal
+        const paymentMethod = order.paymentMethod || (order.paymentDetails && order.paymentDetails.method);
+        const paypalOrderId = order.paymentDetails && order.paymentDetails.paypalOrderId;
+
+        if (paymentMethod !== 'paypal' || !paypalOrderId) {
+            return res.status(400).json({ 
+                error: 'Order was not paid via PayPal',
+                paymentMethod: paymentMethod 
+            });
+        }
+
+        // Get the capture ID from PayPal
+        const accessToken = await paypalGetAccessToken();
+        const orderDetailsUrl = PAYPAL_API_BASE + '/v2/checkout/orders/' + encodeURIComponent(paypalOrderId);
+        const { status: orderStatus, data: orderData } = await httpRequestJson(orderDetailsUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': 'Bearer ' + accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (orderStatus < 200 || orderStatus >= 300 || !orderData) {
+            return res.status(500).json({ 
+                error: 'Failed to retrieve PayPal order details',
+                status: orderStatus 
+            });
+        }
+
+        // Extract capture ID
+        const captureId = orderData.purchase_units && 
+                        orderData.purchase_units[0] && 
+                        orderData.purchase_units[0].payments && 
+                        orderData.purchase_units[0].payments.captures && 
+                        orderData.purchase_units[0].payments.captures[0] && 
+                        orderData.purchase_units[0].payments.captures[0].id;
+
+        if (!captureId) {
+            return res.status(400).json({ 
+                error: 'No capture found for this PayPal order',
+                paypalOrderId: paypalOrderId 
+            });
+        }
+
+        // Process the refund (full or partial)
+        const refundAmount = amount ? String(Number(amount).toFixed(2)) : String(Number(order.total).toFixed(2));
+        const refundData = await paypalRefundCaptureRemote(captureId, refundAmount, PAYPAL_CURRENCY);
+
+        console.log('PayPal refund processed via API:', refundData);
+
+        // Update order status
+        order.status = 'refunded';
+        order.refundDetails = {
+            paypalRefundId: refundData.id,
+            paypalRefundStatus: refundData.status,
+            refundedAmount: refundAmount,
+            refundedAt: new Date().toISOString(),
+            note: note || 'Admin-initiated refund via API'
+        };
+        if (!order.history) order.history = [];
+        order.history.push({
+            status: 'refunded via PayPal',
+            at: new Date().toISOString(),
+            refundId: refundData.id
+        });
+
+        persistStore(() => {});
+
+        return res.json({
+            success: true,
+            message: 'Refund processed successfully',
+            refund: {
+                id: refundData.id,
+                status: refundData.status,
+                amount: refundAmount,
+                currency: PAYPAL_CURRENCY
+            }
+        });
+    } catch (e) {
+        console.error('PayPal refund API error:', e);
+        return res.status(500).json({ 
+            error: 'Failed to process PayPal refund',
+            details: e.message 
+        });
     }
 });
 
