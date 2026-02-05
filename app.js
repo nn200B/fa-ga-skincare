@@ -1583,9 +1583,10 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
             const order = (inMemory.orders || []).find(o => String(o.id) === String(r.orderId));
             
             if (order) {
-                // Check if payment was made via PayPal
+                // Check if payment was made via PayPal or Stripe
                 const paymentMethod = order.paymentMethod || (order.paymentDetails && order.paymentDetails.method);
                 const paypalOrderId = order.paymentDetails && order.paymentDetails.paypalOrderId;
+                const stripePaymentIntentId = order.paymentDetails && order.paymentDetails.stripePaymentIntentId;
                 
                 if (paymentMethod === 'paypal' && paypalOrderId) {
                     try {
@@ -1641,9 +1642,30 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                         req.flash('error', `Refund approved locally, but PayPal refund failed: ${paypalError.message}. Please process manually in PayPal dashboard.`);
                         r.paypalRefundError = paypalError.message;
                     }
+                } else if (paymentMethod === 'stripe' && stripePaymentIntentId) {
+                    try {
+                        console.log('Processing Stripe refund for payment intent:', stripePaymentIntentId);
+                        
+                        // Process the refund with Stripe (full refund)
+                        const refundAmount = order.total ? Number(order.total) : null;
+                        const refundData = await stripeRefundPaymentIntent(stripePaymentIntentId, refundAmount);
+                        
+                        console.log('Stripe refund processed successfully:', refundData);
+                        
+                        // Store refund details in the request
+                        r.stripeRefundId = refundData.id;
+                        r.stripeRefundStatus = refundData.status;
+                        r.refundedAmount = refundAmount ? refundAmount.toFixed(2) : order.total;
+                        
+                        req.flash('success', `Refund approved and processed via Stripe. Refund ID: ${refundData.id}`);
+                    } catch (stripeError) {
+                        console.error('Stripe refund error:', stripeError);
+                        req.flash('error', `Refund approved locally, but Stripe refund failed: ${stripeError.message}. Please process manually in Stripe dashboard.`);
+                        r.stripeRefundError = stripeError.message;
+                    }
                 } else {
-                    // Non-PayPal order (QR/NETS) - just mark as refunded locally
-                    req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal payment - process refund manually if needed)`);
+                    // Non-PayPal/Stripe order (QR/NETS) - just mark as refunded locally
+                    req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
                 // Remove order from active orders list
@@ -2121,7 +2143,8 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
         membership,
         paypalClientId: PAYPAL_CLIENT_ID,
         paypalCurrency: PAYPAL_CURRENCY,
-        paypalEnv: PAYPAL_ENV
+        paypalEnv: PAYPAL_ENV,
+        stripePublishableKey: STRIPE_PUBLISHABLE_KEY
     });
 });
 
@@ -2864,6 +2887,249 @@ app.post('/api/paypal/refund-order', checkAuthenticated, checkAdmin, async (req,
             error: 'Failed to process PayPal refund',
             details: e.message 
         });
+    }
+});
+
+// ---------------- Stripe Checkout Endpoints ----------------
+
+// Create Stripe checkout session
+app.post('/api/stripe/create-checkout-session', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+    }
+
+    try {
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        
+        if (!cart || cart.length === 0) {
+            return res.status(400).json({ error: 'Cart is empty' });
+        }
+        if (!req.session.delivery) {
+            return res.status(400).json({ error: 'Missing delivery details' });
+        }
+
+        const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+
+        const now = new Date();
+        const cutoffHour = 13;
+        let deliveryCost = 10;
+        let pointsRedeemed = 0;
+        let finalDeliveryOption = (deliveryOption || 'normal');
+
+        if (finalDeliveryOption === 'one-day') {
+            if (now.getHours() >= cutoffHour) {
+                return res.status(400).json({ error: 'One-day delivery must be ordered before 1pm.' });
+            }
+            deliveryCost = 25;
+        }
+
+        const membership = buildMembershipSummary(req.session.user || {});
+        const wantsFreeDelivery = usePointsFreeDelivery === true || usePointsFreeDelivery === 'on' || usePointsFreeDelivery === '1';
+        if (wantsFreeDelivery && finalDeliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+            deliveryCost = 0;
+            pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+        }
+
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        // Save pending checkout data in session
+        req.session.pendingCheckout = {
+            deliveryOption: finalDeliveryOption,
+            deliveryCost,
+            subtotal,
+            pointsRedeemed
+        };
+
+        // Create line items for Stripe
+        const lineItems = cart.map(item => ({
+            price_data: {
+                currency: STRIPE_CURRENCY,
+                product_data: {
+                    name: item.productName || item.name || 'Product',
+                    images: item.image ? [`${req.protocol}://${req.get('host')}/images/${item.image}`] : []
+                },
+                unit_amount: Math.round(Number(item.price) * 100) // Convert to cents
+            },
+            quantity: Number(item.quantity) || 1
+        }));
+
+        // Add delivery as a line item
+        if (deliveryCost > 0) {
+            lineItems.push({
+                price_data: {
+                    currency: STRIPE_CURRENCY,
+                    product_data: {
+                        name: finalDeliveryOption === 'one-day' ? 'One-Day Delivery' : 'Standard Delivery'
+                    },
+                    unit_amount: Math.round(deliveryCost * 100)
+                },
+                quantity: 1
+            });
+        }
+
+        // Create Stripe checkout session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: lineItems,
+            mode: 'payment',
+            success_url: `${req.protocol}://${req.get('host')}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${req.protocol}://${req.get('host')}/checkout`,
+            client_reference_id: String(getUserIdFromSessionUser(req.session.user)),
+            metadata: {
+                userId: String(getUserIdFromSessionUser(req.session.user)),
+                deliveryOption: finalDeliveryOption,
+                pointsRedeemed: String(pointsRedeemed)
+            }
+        });
+
+        return res.json({ id: session.id, url: session.url });
+    } catch (e) {
+        console.error('Stripe checkout session error:', e);
+        return res.status(500).json({ error: 'Failed to create checkout session', details: e.message });
+    }
+});
+
+// Stripe success callback
+app.get('/stripe/success', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    const sessionId = req.query.session_id;
+    
+    if (!sessionId || !stripe) {
+        req.flash('error', 'Invalid payment session');
+        return res.redirect('/checkout');
+    }
+
+    try {
+        // Retrieve the session from Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        
+        if (session.payment_status !== 'paid') {
+            req.flash('error', 'Payment not completed');
+            return res.redirect('/checkout');
+        }
+
+        // Build internal order from session data
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        
+        const pending = req.session.pendingCheckout || {};
+        const subtotal = pending.subtotal != null ? Number(pending.subtotal) : cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+        const deliveryCost = Number(pending.deliveryCost || 0);
+        const pointsRedeemed = Number(pending.pointsRedeemed || 0);
+        const deliveryOption = pending.deliveryOption || 'normal';
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal,
+            deliveryOption,
+            deliveryCost,
+            total,
+            paymentMethod: 'stripe',
+            delivery: req.session.delivery || null
+        };
+
+        const toCreate = Object.assign({}, orderBase, {
+            status: 'paid',
+            paymentDetails: {
+                method: 'stripe',
+                stripeSessionId: sessionId,
+                stripePaymentIntentId: session.payment_intent
+            },
+            deliveryStatus: 'processing',
+            membership: {
+                pointsEarned: Math.floor(subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: pointsRedeemed
+            }
+        });
+
+        // Create order in our store
+        addOrder(toCreate, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (stripe):', err);
+                req.flash('error', 'Payment successful but order creation failed. Please contact support.');
+                return res.redirect('/orders');
+            }
+
+            // Deduct stock
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Update points
+            try {
+                if (req.session.user && uid) {
+                    const earned = Math.floor(subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(req.session.user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (pointsRedeemed > 0) currentPoints = Math.max(0, currentPoints - pointsRedeemed);
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username} (Stripe).`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            // Cleanup pending selection
+            req.session.pendingCheckout = null;
+            req.session.lastOrderId = created.id;
+            
+            req.flash('success', 'Payment successful! Your order has been placed.');
+            return res.redirect('/orders/' + encodeURIComponent(created.id));
+        });
+    } catch (e) {
+        console.error('Stripe success handler error:', e);
+        req.flash('error', 'An error occurred processing your payment');
+        return res.redirect('/checkout');
     }
 });
 
