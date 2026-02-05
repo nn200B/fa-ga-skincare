@@ -125,41 +125,85 @@
   ],
   "nextProductId": 13,
   "nextCategoryId": 7,
-  "orders": [
+  "orders": [],
+  "nextOrderId": 2,
+  "notifications": [
     {
-      "userId": 5,
-      "items": [
-        {
-          "productId": 1,
-          "productName": "Velvet Cloud Cream Cleanser",
-          "price": "29.00",
-          "quantity": 1,
-          "image": "cleanser_velvet_cloud.png"
-        }
-      ],
-      "subtotal": 29,
-      "deliveryOption": "normal",
-      "deliveryCost": 10,
-      "total": 39,
-      "paymentMethod": "nets",
-      "delivery": {
-        "fullName": "justin",
-        "street": "somewhere",
-        "unit": "01-01",
-        "postalCode": "111000",
-        "note": ""
-      },
-      "status": "pending_payment",
-      "deliveryStatus": "processing",
       "id": 1,
-      "createdAt": "2026-01-27T03:20:45.605Z"
+      "userId": null,
+      "role": "admin",
+      "type": "order",
+      "message": "New paid order #1 from abc (Stripe).",
+      "link": "/admin/orders",
+      "createdAt": "2026-02-05T19:04:55.118Z",
+      "read": false
+    },
+    {
+      "id": 2,
+      "userId": 5,
+      "role": "user",
+      "type": "order",
+      "message": "Your order #1 has been placed successfully.",
+      "link": "/orders/1",
+      "createdAt": "2026-02-05T19:04:55.119Z",
+      "read": false
+    },
+    {
+      "id": 3,
+      "userId": null,
+      "role": "admin",
+      "type": "refund",
+      "message": "New refund request for order #1 from abc.",
+      "link": "/admin/help-center",
+      "createdAt": "2026-02-05T19:06:13.231Z",
+      "read": true,
+      "readAt": "2026-02-05T19:06:28.849Z"
+    },
+    {
+      "id": 4,
+      "userId": 5,
+      "role": "user",
+      "type": "refund",
+      "message": "Your refund request for order #1 has been submitted.",
+      "link": "/help-center",
+      "createdAt": "2026-02-05T19:06:13.231Z",
+      "read": false
+    },
+    {
+      "id": 5,
+      "userId": 5,
+      "role": "user",
+      "type": "refund",
+      "message": "Your order #1 has been cancelled and refund accepted.",
+      "link": "/notifications",
+      "createdAt": "2026-02-05T19:06:32.999Z",
+      "read": false
     }
   ],
-  "nextOrderId": 2,
-  "notifications": [],
-  "nextNotificationId": 1,
-  "refundRequests": [],
-  "nextRefundId": 1,
+  "nextNotificationId": 6,
+  "refundRequests": [
+    {
+      "id": 1,
+      "userId": 5,
+      "username": "abc",
+      "orderId": 1,
+      "reason": "ts ass",
+      "status": "approved",
+      "createdAt": "2026-02-05T19:06:13.229Z",
+      "stripeRefundId": "re_3SxXrEGyvc6tqzVV1djiv5o4",
+      "stripeRefundStatus": "succeeded",
+      "refundedAmount": "79.00",
+      "history": [
+        {
+          "status": "order cancelled and refund accepted",
+          "at": "2026-02-05T19:06:32.999Z"
+        }
+      ],
+      "refundStatus": "refund accepted",
+      "updatedAt": "2026-02-05T19:06:32.999Z"
+    }
+  ],
+  "nextRefundId": 2,
   "addressChangeRequests": [],
   "nextAddressChangeId": 1,
   "users": [],
