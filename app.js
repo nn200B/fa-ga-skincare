@@ -42,22 +42,6 @@ try {
 } catch (e) {}
 const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
 
-// ---------------- Stripe configuration ----------------
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
-const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
-const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY || 'sgd').toLowerCase();
-let stripe = null;
-if (STRIPE_SECRET_KEY) {
-    try {
-        stripe = require('stripe')(STRIPE_SECRET_KEY);
-        console.log('Stripe initialized successfully');
-    } catch (e) {
-        console.warn('Stripe initialization failed:', e.message);
-    }
-} else {
-    console.warn('STRIPE_SECRET_KEY not set - Stripe payments disabled');
-}
-
 // Set up multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -71,10 +55,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 let connection = mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'Republic_C207',
-    database: process.env.DB_NAME || 'c372_glowaura_skincare'
+    host: 'localhost',
+    user: 'root',
+    password: 'Republic_C207',
+    database: 'c372_glowaura_skincare'
 });
 // If SKIP_DB is enabled we will later overwrite connection with a safe stub to avoid accidental DB calls crashing the app.
 
@@ -1684,6 +1668,27 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                     req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
+                // Restore stock for all items in the refunded order
+                if (order && order.items && Array.isArray(order.items)) {
+                    try {
+                        order.items.forEach(item => {
+                            const pid = item.productId || item.id;
+                            const qty = Number(item.quantity) || 0;
+                            if (!pid || qty <= 0) return;
+                            const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
+                            connection.query(sql, [qty, pid], (e) => {
+                                if (e) {
+                                    console.error('Failed to restore stock for product', pid, 'quantity', qty, e);
+                                } else {
+                                    console.log('Stock restored for product', pid, 'quantity', qty);
+                                }
+                            });
+                        });
+                    } catch (e) {
+                        console.error('Error during stock restoration:', e);
+                    }
+                }
+
                 // Remove order from active orders list
                 const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
                 if (idx !== -1) {
@@ -2617,24 +2622,6 @@ async function paypalRefundCaptureRemote(captureId, amount, currency) {
         throw new Error('PayPal refund failed: ' + status + ' ' + JSON.stringify(data));
     }
     return data;
-}
-
-// ---------------- Stripe Refund Function ----------------
-async function stripeRefundPaymentIntent(paymentIntentId, amount) {
-    if (!stripe) {
-        throw new Error('Stripe not initialized');
-    }
-    
-    try {
-        const refundParams = amount 
-            ? { payment_intent: paymentIntentId, amount: Math.round(Number(amount) * 100) } // Convert to cents
-            : { payment_intent: paymentIntentId }; // Full refund
-        
-        const refund = await stripe.refunds.create(refundParams);
-        return refund;
-    } catch (error) {
-        throw new Error('Stripe refund failed: ' + error.message);
-    }
 }
 
 // Create PayPal order using current cart + delivery selection
