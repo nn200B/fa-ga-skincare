@@ -126,7 +126,7 @@
   "nextProductId": 13,
   "nextCategoryId": 7,
   "orders": [],
-  "nextOrderId": 6,
+  "nextOrderId": 2,
   "notifications": [
     {
       "id": 1,
@@ -136,8 +136,7 @@
       "message": "New paid order #1 from abc (Stripe).",
       "link": "/admin/orders",
       "createdAt": "2026-02-05T19:04:55.118Z",
-      "read": true,
-      "readAt": "2026-02-06T00:38:38.548Z"
+      "read": false
     },
     {
       "id": 2,
@@ -179,221 +178,9 @@
       "link": "/notifications",
       "createdAt": "2026-02-05T19:06:32.999Z",
       "read": false
-    },
-    {
-      "id": 6,
-      "userId": null,
-      "role": "admin",
-      "type": "order",
-      "message": "New paid order #2 from abc (Stripe).",
-      "link": "/admin/orders",
-      "createdAt": "2026-02-06T04:14:08.347Z",
-      "read": true,
-      "readAt": "2026-02-06T04:14:20.973Z"
-    },
-    {
-      "id": 7,
-      "userId": 5,
-      "role": "user",
-      "type": "order",
-      "message": "Your order #2 has been placed successfully.",
-      "link": "/orders/2",
-      "createdAt": "2026-02-06T04:14:08.347Z",
-      "read": false
-    },
-    {
-      "id": 8,
-      "userId": null,
-      "role": "admin",
-      "type": "refund",
-      "message": "New refund request for order #2 from abc.",
-      "link": "/admin/help-center",
-      "createdAt": "2026-02-06T04:15:34.194Z",
-      "read": true,
-      "readAt": "2026-02-06T04:15:53.013Z"
-    },
-    {
-      "id": 9,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your refund request for order #2 has been submitted.",
-      "link": "/help-center",
-      "createdAt": "2026-02-06T04:15:34.194Z",
-      "read": false
-    },
-    {
-      "id": 10,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your order #2 has been cancelled and refund accepted.",
-      "link": "/notifications",
-      "createdAt": "2026-02-06T04:16:00.392Z",
-      "read": false
-    },
-    {
-      "id": 11,
-      "userId": null,
-      "role": "admin",
-      "type": "order",
-      "message": "New paid order #3 from abc (Stripe).",
-      "link": "/admin/orders",
-      "createdAt": "2026-02-06T04:30:40.575Z",
-      "read": false
-    },
-    {
-      "id": 12,
-      "userId": 5,
-      "role": "user",
-      "type": "order",
-      "message": "Your order #3 has been placed successfully.",
-      "link": "/orders/3",
-      "createdAt": "2026-02-06T04:30:40.576Z",
-      "read": false
-    },
-    {
-      "id": 13,
-      "userId": null,
-      "role": "admin",
-      "type": "order",
-      "message": "New paid order #4 from abc (Stripe).",
-      "link": "/admin/orders",
-      "createdAt": "2026-02-06T04:31:39.095Z",
-      "read": false
-    },
-    {
-      "id": 14,
-      "userId": 5,
-      "role": "user",
-      "type": "order",
-      "message": "Your order #4 has been placed successfully.",
-      "link": "/orders/4",
-      "createdAt": "2026-02-06T04:31:39.096Z",
-      "read": false
-    },
-    {
-      "id": 15,
-      "userId": null,
-      "role": "admin",
-      "type": "refund",
-      "message": "New refund request for order #4 from abc.",
-      "link": "/admin/help-center",
-      "createdAt": "2026-02-06T04:33:11.088Z",
-      "read": false
-    },
-    {
-      "id": 16,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your refund request for order #4 has been submitted.",
-      "link": "/help-center",
-      "createdAt": "2026-02-06T04:33:11.089Z",
-      "read": false
-    },
-    {
-      "id": 17,
-      "userId": null,
-      "role": "admin",
-      "type": "refund",
-      "message": "New refund request for order #3 from abc.",
-      "link": "/admin/help-center",
-      "createdAt": "2026-02-06T04:33:17.694Z",
-      "read": false
-    },
-    {
-      "id": 18,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your refund request for order #3 has been submitted.",
-      "link": "/help-center",
-      "createdAt": "2026-02-06T04:33:17.694Z",
-      "read": false
-    },
-    {
-      "id": 19,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your order #4 has been cancelled and refund accepted.",
-      "link": "/notifications",
-      "createdAt": "2026-02-06T04:34:07.670Z",
-      "read": false
-    },
-    {
-      "id": 20,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your order #3 has been cancelled and refund accepted.",
-      "link": "/notifications",
-      "createdAt": "2026-02-06T04:34:29.645Z",
-      "read": false
-    },
-    {
-      "id": 21,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your order #3 has been cancelled and refund accepted.",
-      "link": "/notifications",
-      "createdAt": "2026-02-06T04:34:29.957Z",
-      "read": false
-    },
-    {
-      "id": 22,
-      "userId": null,
-      "role": "admin",
-      "type": "order",
-      "message": "New paid order #5 from abc (Stripe).",
-      "link": "/admin/orders",
-      "createdAt": "2026-02-06T04:43:15.531Z",
-      "read": false
-    },
-    {
-      "id": 23,
-      "userId": 5,
-      "role": "user",
-      "type": "order",
-      "message": "Your order #5 has been placed successfully.",
-      "link": "/orders/5",
-      "createdAt": "2026-02-06T04:43:15.532Z",
-      "read": false
-    },
-    {
-      "id": 24,
-      "userId": null,
-      "role": "admin",
-      "type": "refund",
-      "message": "New refund request for order #5 from abc.",
-      "link": "/admin/help-center",
-      "createdAt": "2026-02-06T04:43:31.753Z",
-      "read": false
-    },
-    {
-      "id": 25,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your refund request for order #5 has been submitted.",
-      "link": "/help-center",
-      "createdAt": "2026-02-06T04:43:31.753Z",
-      "read": false
-    },
-    {
-      "id": 26,
-      "userId": 5,
-      "role": "user",
-      "type": "refund",
-      "message": "Your order #5 has been cancelled and refund accepted.",
-      "link": "/notifications",
-      "createdAt": "2026-02-06T04:44:04.823Z",
-      "read": false
     }
   ],
-  "nextNotificationId": 27,
+  "nextNotificationId": 6,
   "refundRequests": [
     {
       "id": 1,
@@ -414,94 +201,9 @@
       ],
       "refundStatus": "refund accepted",
       "updatedAt": "2026-02-05T19:06:32.999Z"
-    },
-    {
-      "id": 2,
-      "userId": 5,
-      "username": "abc",
-      "orderId": 2,
-      "reason": "ts asss",
-      "status": "approved",
-      "createdAt": "2026-02-06T04:15:34.192Z",
-      "stripeRefundId": "re_3SxgQiGyvc6tqzVV0QVEP8n0",
-      "stripeRefundStatus": "succeeded",
-      "refundedAmount": "39.00",
-      "history": [
-        {
-          "status": "order cancelled and refund accepted",
-          "at": "2026-02-06T04:16:00.391Z"
-        }
-      ],
-      "refundStatus": "refund accepted",
-      "updatedAt": "2026-02-06T04:16:00.391Z"
-    },
-    {
-      "id": 3,
-      "userId": 5,
-      "username": "abc",
-      "orderId": 4,
-      "reason": "555",
-      "status": "approved",
-      "createdAt": "2026-02-06T04:33:11.087Z",
-      "stripeRefundId": "re_3SxghfGyvc6tqzVV0wdXp2G7",
-      "stripeRefundStatus": "succeeded",
-      "refundedAmount": "79.00",
-      "history": [
-        {
-          "status": "order cancelled and refund accepted",
-          "at": "2026-02-06T04:34:07.670Z"
-        }
-      ],
-      "refundStatus": "refund accepted",
-      "updatedAt": "2026-02-06T04:34:07.670Z"
-    },
-    {
-      "id": 4,
-      "userId": 5,
-      "username": "abc",
-      "orderId": 3,
-      "reason": "5151",
-      "status": "approved",
-      "createdAt": "2026-02-06T04:33:17.692Z",
-      "stripeRefundId": "re_3SxggjGyvc6tqzVV0FDbNGfb",
-      "stripeRefundStatus": "succeeded",
-      "refundedAmount": "39.00",
-      "history": [
-        {
-          "status": "order cancelled and refund accepted",
-          "at": "2026-02-06T04:34:29.644Z"
-        },
-        {
-          "status": "order cancelled and refund accepted",
-          "at": "2026-02-06T04:34:29.956Z"
-        }
-      ],
-      "refundStatus": "refund accepted",
-      "updatedAt": "2026-02-06T04:34:29.956Z",
-      "stripeRefundError": "Stripe refund failed: Charge ch_3SxggjGyvc6tqzVV0YSesAkH has already been refunded."
-    },
-    {
-      "id": 5,
-      "userId": 5,
-      "username": "abc",
-      "orderId": 5,
-      "reason": "i dont like",
-      "status": "approved",
-      "createdAt": "2026-02-06T04:43:31.751Z",
-      "stripeRefundId": "re_3SxgsuGyvc6tqzVV1SYMt12H",
-      "stripeRefundStatus": "succeeded",
-      "refundedAmount": "79.00",
-      "history": [
-        {
-          "status": "order cancelled and refund accepted",
-          "at": "2026-02-06T04:44:04.822Z"
-        }
-      ],
-      "refundStatus": "refund accepted",
-      "updatedAt": "2026-02-06T04:44:04.822Z"
     }
   ],
-  "nextRefundId": 6,
+  "nextRefundId": 2,
   "addressChangeRequests": [],
   "nextAddressChangeId": 1,
   "users": [],

@@ -5,7 +5,6 @@ const mysql = require('mysql2');
 const session = require('express-session');
 const flash = require('connect-flash');
 const multer = require('multer');
-const Stripe = require('stripe'); // Renamed to avoid conflict
 const app = express();
 const fs = require('fs');
 const path = require('path');
@@ -50,7 +49,7 @@ const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY || 'sgd').toLowerCase();
 let stripe = null;
 if (STRIPE_SECRET_KEY) {
     try {
-        stripe = Stripe(STRIPE_SECRET_KEY);
+        stripe = require('stripe')(STRIPE_SECRET_KEY);
         console.log('Stripe initialized successfully');
     } catch (e) {
         console.warn('Stripe initialization failed:', e.message);
@@ -379,7 +378,6 @@ function addRefundRequest(data, cb) {
         orderId: data.orderId,
         reason: data.reason,
         status: 'pending',
-        items: data.items || [],  // Store order items for refund processing
         createdAt: new Date().toISOString()
     };
     inMemory.refundRequests.push(r);
@@ -1686,44 +1684,6 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                     req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
-                // Restore stock for all items in the refunded order
-                console.log('🔍 Attempting to restore stock for order:', r.orderId);
-                console.log('🔍 Order object:', JSON.stringify(order, null, 2));
-                
-                if (order && order.items && Array.isArray(order.items)) {
-                    console.log('🔍 Found', order.items.length, 'items to restore');
-                    try {
-                        order.items.forEach(item => {
-                            console.log('🔍 Processing item:', JSON.stringify(item, null, 2));
-                            const pid = item.productId || item.id;
-                            const qty = Number(item.quantity) || 0;
-                            console.log('🔍 Product ID:', pid, 'Quantity to restore:', qty);
-                            
-                            if (!pid || qty <= 0) {
-                                console.warn('⚠️ Skipping item - invalid pid or quantity');
-                                return;
-                            }
-                            
-                            const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
-                            console.log('🔍 Executing SQL:', sql, 'with params:', [qty, pid]);
-                            
-                            connection.query(sql, [qty, pid], (e, results) => {
-                                if (e) {
-                                    console.error('❌ Failed to restore stock for product', pid, 'quantity', qty, e);
-                                } else {
-                                    console.log('✅ Stock restored for product', pid, '- added back', qty, 'units');
-                                    console.log('✅ Query results:', results);
-                                }
-                            });
-                        });
-                    } catch (e) {
-                        console.error('❌ Error during stock restoration:', e);
-                    }
-                } else {
-                    console.warn('⚠️ No order items found to restore stock for order', r.orderId);
-                    console.log('⚠️ Order structure:', order);
-                }
-
                 // Remove order from active orders list
                 const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
                 if (idx !== -1) {
@@ -2968,7 +2928,7 @@ app.post('/api/paypal/refund-order', checkAuthenticated, checkAdmin, async (req,
 
 // Create Stripe checkout session
 app.post('/api/stripe/create-checkout-session', checkAuthenticated, checkNotAdmin, async (req, res) => {
-    if (!STRIPE_SECRET_KEY) {
+    if (!stripe) {
         return res.status(500).json({ error: 'Stripe not configured' });
     }
 
@@ -3346,8 +3306,7 @@ app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) =>
             userId,
             username: req.session.user.username,
             orderId: order.id,
-            reason,
-            items: order.items || []  // Include items for later stock restoration
+            reason
         }, (e) => {
             if (e) {
                 console.error('Failed to save refund request:', e);
