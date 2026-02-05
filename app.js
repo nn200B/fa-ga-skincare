@@ -362,6 +362,7 @@ function addRefundRequest(data, cb) {
         orderId: data.orderId,
         reason: data.reason,
         status: 'pending',
+        items: data.items || [],  // Store order items for refund processing
         createdAt: new Date().toISOString()
     };
     inMemory.refundRequests.push(r);
@@ -1669,9 +1670,9 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                 }
 
                 // Restore stock for all items in the refunded order
-                if (order && order.items && Array.isArray(order.items)) {
+                if (r.items && Array.isArray(r.items)) {
                     try {
-                        order.items.forEach(item => {
+                        r.items.forEach(item => {
                             const pid = item.productId || item.id;
                             const qty = Number(item.quantity) || 0;
                             if (!pid || qty <= 0) return;
@@ -3293,7 +3294,8 @@ app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) =>
             userId,
             username: req.session.user.username,
             orderId: order.id,
-            reason
+            reason,
+            items: order.items || []  // Include items for later stock restoration
         }, (e) => {
             if (e) {
                 console.error('Failed to save refund request:', e);
