@@ -1687,26 +1687,41 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                 }
 
                 // Restore stock for all items in the refunded order
+                console.log('🔍 Attempting to restore stock for order:', r.orderId);
+                console.log('🔍 Order object:', JSON.stringify(order, null, 2));
+                
                 if (order && order.items && Array.isArray(order.items)) {
+                    console.log('🔍 Found', order.items.length, 'items to restore');
                     try {
                         order.items.forEach(item => {
+                            console.log('🔍 Processing item:', JSON.stringify(item, null, 2));
                             const pid = item.productId || item.id;
                             const qty = Number(item.quantity) || 0;
-                            if (!pid || qty <= 0) return;
+                            console.log('🔍 Product ID:', pid, 'Quantity to restore:', qty);
+                            
+                            if (!pid || qty <= 0) {
+                                console.warn('⚠️ Skipping item - invalid pid or quantity');
+                                return;
+                            }
+                            
                             const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
-                            connection.query(sql, [qty, pid], (e) => {
+                            console.log('🔍 Executing SQL:', sql, 'with params:', [qty, pid]);
+                            
+                            connection.query(sql, [qty, pid], (e, results) => {
                                 if (e) {
-                                    console.error('Failed to restore stock for product', pid, 'quantity', qty, e);
+                                    console.error('❌ Failed to restore stock for product', pid, 'quantity', qty, e);
                                 } else {
                                     console.log('✅ Stock restored for product', pid, '- added back', qty, 'units');
+                                    console.log('✅ Query results:', results);
                                 }
                             });
                         });
                     } catch (e) {
-                        console.error('Error during stock restoration:', e);
+                        console.error('❌ Error during stock restoration:', e);
                     }
                 } else {
-                    console.warn('No order items found to restore stock for order', r.orderId);
+                    console.warn('⚠️ No order items found to restore stock for order', r.orderId);
+                    console.log('⚠️ Order structure:', order);
                 }
 
                 // Remove order from active orders list
