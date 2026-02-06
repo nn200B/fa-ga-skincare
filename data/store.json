@@ -125,6 +125,7 @@
   ],
   "nextProductId": 13,
   "nextCategoryId": 7,
+<<<<<<< HEAD
   "orders": [
     {
       "userId": 6,
@@ -164,6 +165,10 @@
     }
   ],
   "nextOrderId": 3,
+=======
+  "orders": [],
+  "nextOrderId": 2,
+>>>>>>> 8b703a9aeb80421bc30604c9e24f637b98065b85
   "notifications": [
     {
       "id": 1,
@@ -172,7 +177,11 @@
       "type": "order",
       "message": "New paid order #1 from n (Stripe).",
       "link": "/admin/orders",
+<<<<<<< HEAD
       "createdAt": "2026-02-06T06:35:14.869Z",
+=======
+      "createdAt": "2026-02-05T19:04:55.118Z",
+>>>>>>> 8b703a9aeb80421bc30604c9e24f637b98065b85
       "read": false
     },
     {
@@ -214,6 +223,7 @@
       "link": "/notifications",
       "createdAt": "2026-02-06T06:35:39.387Z",
       "read": false
+<<<<<<< HEAD
     },
     {
       "id": 6,
@@ -237,6 +247,11 @@
     }
   ],
   "nextNotificationId": 8,
+=======
+    }
+  ],
+  "nextNotificationId": 6,
+>>>>>>> 8b703a9aeb80421bc30604c9e24f637b98065b85
   "refundRequests": [
     {
       "id": 1,
@@ -265,7 +280,11 @@
         }
       ],
       "refundStatus": "refund accepted",
+<<<<<<< HEAD
       "updatedAt": "2026-02-06T06:35:39.387Z"
+=======
+      "updatedAt": "2026-02-05T19:06:32.999Z"
+>>>>>>> 8b703a9aeb80421bc30604c9e24f637b98065b85
     }
   ],
   "nextRefundId": 2,
