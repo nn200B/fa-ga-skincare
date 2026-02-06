@@ -130,34 +130,63 @@
       "userId": 5,
       "items": [
         {
-          "productId": 1,
-          "productName": "Velvet Cloud Cream Cleanser",
-          "price": "29.00",
+          "productId": 4,
+          "productName": "Midnight Repair Retinol Serum",
+          "price": "79.00",
           "quantity": 1,
-          "image": "cleanser_velvet_cloud.png"
+          "image": "serum_retinol_midnight.png"
         }
       ],
-      "subtotal": 29,
+      "subtotal": 79,
       "deliveryOption": "normal",
       "deliveryCost": 10,
-      "total": 39,
-      "paymentMethod": "nets",
+      "total": 89,
+      "paymentMethod": "paypal",
       "delivery": {
-        "fullName": "justin",
-        "street": "somewhere",
-        "unit": "01-01",
-        "postalCode": "111000",
-        "note": ""
+        "fullName": "'o",
+        "street": "p;o';",
+        "unit": ";l'",
+        "postalCode": ";ol'",
+        "note": "o;"
       },
-      "status": "pending_payment",
+      "status": "paid",
+      "paymentDetails": {
+        "method": "paypal",
+        "paypalOrderId": "6GB710475W981582X"
+      },
       "deliveryStatus": "processing",
+      "membership": {
+        "pointsEarned": 79,
+        "pointsRedeemed": 0
+      },
       "id": 1,
-      "createdAt": "2026-01-27T03:20:45.605Z"
+      "createdAt": "2026-01-31T15:07:45.911Z"
     }
   ],
   "nextOrderId": 2,
-  "notifications": [],
-  "nextNotificationId": 1,
+  "notifications": [
+    {
+      "id": 1,
+      "userId": null,
+      "role": "admin",
+      "type": "order",
+      "message": "New paid order #1 from n.",
+      "link": "/admin/orders",
+      "createdAt": "2026-01-31T15:07:45.917Z",
+      "read": false
+    },
+    {
+      "id": 2,
+      "userId": 5,
+      "role": "user",
+      "type": "order",
+      "message": "Your order #1 has been placed successfully.",
+      "link": "/orders/1",
+      "createdAt": "2026-01-31T15:07:45.918Z",
+      "read": false
+    }
+  ],
+  "nextNotificationId": 3,
   "refundRequests": [],
   "nextRefundId": 1,
   "addressChangeRequests": [],
