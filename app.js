@@ -5,6 +5,7 @@ const mysql = require('mysql2');
 const session = require('express-session');
 const flash = require('connect-flash');
 const multer = require('multer');
+const Stripe = require('stripe'); // Renamed to avoid conflict
 const app = express();
 const fs = require('fs');
 const path = require('path');
@@ -42,6 +43,22 @@ try {
 } catch (e) {}
 const PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'SGD';
 
+// ---------------- Stripe configuration ----------------
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
+const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY || 'sgd').toLowerCase();
+let stripe = null;
+if (STRIPE_SECRET_KEY) {
+    try {
+        stripe = Stripe(STRIPE_SECRET_KEY);
+        console.log('Stripe initialized successfully');
+    } catch (e) {
+        console.warn('Stripe initialization failed:', e.message);
+    }
+} else {
+    console.warn('STRIPE_SECRET_KEY not set - Stripe payments disabled');
+}
+
 // Set up multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -55,10 +72,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 let connection = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: 'Republic_C207',
-    database: 'c372_glowaura_skincare'
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || 'Republic_C207',
+    database: process.env.DB_NAME || 'c372_glowaura_skincare'
 });
 // If SKIP_DB is enabled we will later overwrite connection with a safe stub to avoid accidental DB calls crashing the app.
 
@@ -362,6 +379,7 @@ function addRefundRequest(data, cb) {
         orderId: data.orderId,
         reason: data.reason,
         status: 'pending',
+        items: data.items || [],  // Store order items for refund processing
         createdAt: new Date().toISOString()
     };
     inMemory.refundRequests.push(r);
@@ -1562,7 +1580,7 @@ app.get('/admin/help-center', checkAuthenticated, checkAdmin, (req, res) => {
 });
 
 // Admin takes decision on refund: approve or reject
-app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmin, (req, res) => {
+app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmin, async (req, res) => {
     const refundId = req.params.id;
     const decision = (req.body.decision || '').toLowerCase();
     if (decision !== 'approve' && decision !== 'reject') {
@@ -1570,49 +1588,197 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
         return res.redirect('/admin/help-center');
     }
     const newStatus = decision === 'approve' ? 'approved' : 'rejected';
-    updateRefundStatus(refundId, newStatus, (err, r) => {
-        if (err) {
-            console.error('Failed to update refund status:', err);
-            req.flash('error', 'Could not update refund request.');
-        } else {
-            // When approved, mark order as refunded/cancelled and remove from active orders
-            if (newStatus === 'approved') {
-                const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
-                let removedOrder = null;
-                if (idx !== -1) {
-                    removedOrder = inMemory.orders.splice(idx, 1)[0];
+    
+    try {
+        const r = (inMemory.refundRequests || []).find(x => String(x.id) === String(refundId));
+        if (!r) {
+            req.flash('error', 'Refund request not found.');
+            return res.redirect('/admin/help-center');
+        }
+
+        // When approved, process PayPal refund if payment was via PayPal
+        if (newStatus === 'approved') {
+            const order = (inMemory.orders || []).find(o => String(o.id) === String(r.orderId));
+            
+            if (order) {
+                // Check if payment was made via PayPal or Stripe
+                const paymentMethod = order.paymentMethod || (order.paymentDetails && order.paymentDetails.method);
+                const paypalOrderId = order.paymentDetails && order.paymentDetails.paypalOrderId;
+                const stripePaymentIntentId = order.paymentDetails && order.paymentDetails.stripePaymentIntentId;
+                
+                if (paymentMethod === 'paypal' && paypalOrderId) {
+                    try {
+                        console.log('Processing PayPal refund for order:', paypalOrderId);
+                        
+                        // First, get the capture ID from the PayPal order
+                        const accessToken = await paypalGetAccessToken();
+                        const orderDetailsUrl = PAYPAL_API_BASE + '/v2/checkout/orders/' + encodeURIComponent(paypalOrderId);
+                        const { status: orderStatus, data: orderData } = await httpRequestJson(orderDetailsUrl, {
+                            method: 'GET',
+                            headers: {
+                                'Authorization': 'Bearer ' + accessToken,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        if (orderStatus >= 200 && orderStatus < 300 && orderData) {
+                            // Extract capture ID from the order details
+                            const captureId = orderData.purchase_units && 
+                                            orderData.purchase_units[0] && 
+                                            orderData.purchase_units[0].payments && 
+                                            orderData.purchase_units[0].payments.captures && 
+                                            orderData.purchase_units[0].payments.captures[0] && 
+                                            orderData.purchase_units[0].payments.captures[0].id;
+
+                            if (captureId) {
+                                // Process the refund with PayPal (full refund)
+                                const refundAmount = order.total ? String(Number(order.total).toFixed(2)) : null;
+                                const refundData = await paypalRefundCaptureRemote(
+                                    captureId, 
+                                    refundAmount, 
+                                    PAYPAL_CURRENCY
+                                );
+                                
+                                console.log('PayPal refund processed successfully:', refundData);
+                                
+                                // Store refund details in the request
+                                r.paypalRefundId = refundData.id;
+                                r.paypalRefundStatus = refundData.status;
+                                r.refundedAmount = refundAmount;
+                                
+                                req.flash('success', `Refund approved and processed via PayPal. Refund ID: ${refundData.id}`);
+                            } else {
+                                console.warn('Could not find capture ID for PayPal order:', paypalOrderId);
+                                req.flash('warning', 'Refund approved locally, but PayPal capture ID not found. Please process refund manually in PayPal dashboard.');
+                            }
+                        } else {
+                            console.warn('Failed to get PayPal order details:', orderStatus, orderData);
+                            req.flash('warning', 'Refund approved locally, but could not retrieve PayPal order details. Please process refund manually.');
+                        }
+                    } catch (paypalError) {
+                        console.error('PayPal refund error:', paypalError);
+                        req.flash('error', `Refund approved locally, but PayPal refund failed: ${paypalError.message}. Please process manually in PayPal dashboard.`);
+                        r.paypalRefundError = paypalError.message;
+                    }
+                } else if (paymentMethod === 'stripe' && stripePaymentIntentId) {
+                    try {
+                        console.log('Processing Stripe refund for payment intent:', stripePaymentIntentId);
+                        
+                        // Process the refund with Stripe (full refund)
+                        const refundAmount = order.total ? Number(order.total) : null;
+                        const refundData = await stripeRefundPaymentIntent(stripePaymentIntentId, refundAmount);
+                        
+                        console.log('Stripe refund processed successfully:', refundData);
+                        
+                        // Store refund details in the request
+                        r.stripeRefundId = refundData.id;
+                        r.stripeRefundStatus = refundData.status;
+                        r.refundedAmount = refundAmount ? refundAmount.toFixed(2) : order.total;
+                        
+                        req.flash('success', `Refund approved and processed via Stripe. Refund ID: ${refundData.id}`);
+                    } catch (stripeError) {
+                        console.error('Stripe refund error:', stripeError);
+                        req.flash('error', `Refund approved locally, but Stripe refund failed: ${stripeError.message}. Please process manually in Stripe dashboard.`);
+                        r.stripeRefundError = stripeError.message;
+                    }
+                } else {
+                    // Non-PayPal/Stripe order (QR/NETS) - just mark as refunded locally
+                    req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
-                // Optional: keep a history array on the refund request
+                // Restore stock for all items in the refunded order
+                console.log('🔍 Attempting to restore stock for order:', r.orderId);
+                console.log('🔍 Order object:', JSON.stringify(order, null, 2));
+                
+                if (order && order.items && Array.isArray(order.items)) {
+                    console.log('🔍 Found', order.items.length, 'items to restore');
+                    try {
+                        order.items.forEach(item => {
+                            console.log('🔍 Processing item:', JSON.stringify(item, null, 2));
+                            const pid = item.productId || item.id;
+                            const qty = Number(item.quantity) || 0;
+                            console.log('🔍 Product ID:', pid, 'Quantity to restore:', qty);
+                            
+                            if (!pid || qty <= 0) {
+                                console.warn('⚠️ Skipping item - invalid pid or quantity');
+                                return;
+                            }
+                            
+                            const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
+                            console.log('🔍 Executing SQL:', sql, 'with params:', [qty, pid]);
+                            
+                            connection.query(sql, [qty, pid], (e, results) => {
+                                if (e) {
+                                    console.error('❌ Failed to restore stock for product', pid, 'quantity', qty, e);
+                                } else {
+                                    console.log('✅ Stock restored for product', pid, '- added back', qty, 'units');
+                                    console.log('✅ Query results:', results);
+                                }
+                            });
+                        });
+                    } catch (e) {
+                        console.error('❌ Error during stock restoration:', e);
+                    }
+                } else {
+                    console.warn('⚠️ No order items found to restore stock for order', r.orderId);
+                    console.log('⚠️ Order structure:', order);
+                }
+
+                // Remove order from active orders list
+                const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
+                if (idx !== -1) {
+                    inMemory.orders.splice(idx, 1);
+                }
+
+                // Add history to refund request
                 if (!r.history) r.history = [];
-                r.history.push({ status: 'order cancelled and refund accepted', at: new Date().toISOString() });
-
-                persistStore(() => {
-                    req.flash('success', `Refund accepted and order #${r.orderId} cancelled.`);
-                });
-
-                // Notify user about refund decision
-                addNotification({
-                    role: 'user',
-                    userId: r.userId,
-                    type: 'refund',
-                    message: `Your order #${r.orderId} has been cancelled and refund accepted.`,
-                    link: '/notifications'
-                });
-            } else {
-                req.flash('success', `Refund request #${refundId} rejected.`);
-                // Notify user about refund rejection
-                addNotification({
-                    role: 'user',
-                    userId: r.userId,
-                    type: 'refund',
-                    message: `Your refund request for order #${r.orderId} has been rejected.`,
-                    link: '/orders'
+                r.history.push({ 
+                    status: 'order cancelled and refund accepted', 
+                    at: new Date().toISOString() 
                 });
             }
+
+            // Update refund status
+            updateRefundStatus(refundId, newStatus, (err) => {
+                if (err) {
+                    console.error('Failed to update refund status:', err);
+                }
+                persistStore(() => {});
+            });
+
+            // Notify user about refund decision
+            addNotification({
+                role: 'user',
+                userId: r.userId,
+                type: 'refund',
+                message: `Your order #${r.orderId} has been cancelled and refund accepted.`,
+                link: '/notifications'
+            });
+        } else {
+            // Rejected
+            updateRefundStatus(refundId, newStatus, (err) => {
+                if (err) {
+                    console.error('Failed to update refund status:', err);
+                }
+            });
+            
+            req.flash('success', `Refund request #${refundId} rejected.`);
+            
+            // Notify user about refund rejection
+            addNotification({
+                role: 'user',
+                userId: r.userId,
+                type: 'refund',
+                message: `Your refund request for order #${r.orderId} has been rejected.`,
+                link: '/orders'
+            });
         }
-        return res.redirect('/admin/help-center');
-    });
+    } catch (err) {
+        console.error('Error processing refund decision:', err);
+        req.flash('error', 'An error occurred while processing the refund decision.');
+    }
+    
+    return res.redirect('/admin/help-center');
 });
 
 // Admin takes decision on address change: approve or reject
@@ -2033,7 +2199,8 @@ app.get('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
         membership,
         paypalClientId: PAYPAL_CLIENT_ID,
         paypalCurrency: PAYPAL_CURRENCY,
-        paypalEnv: PAYPAL_ENV
+        paypalEnv: PAYPAL_ENV,
+        stripePublishableKey: STRIPE_PUBLISHABLE_KEY
     });
 });
 
@@ -2465,6 +2632,51 @@ async function paypalCaptureOrderRemote(orderId) {
     return data;
 }
 
+async function paypalRefundCaptureRemote(captureId, amount, currency) {
+    const accessToken = await paypalGetAccessToken();
+    const url = PAYPAL_API_BASE + '/v2/payments/captures/' + encodeURIComponent(captureId) + '/refund';
+    
+    // If amount and currency are provided, do partial refund, otherwise full refund
+    const payload = amount && currency ? JSON.stringify({
+        amount: {
+            value: amount,
+            currency_code: currency
+        }
+    }) : '{}';
+    
+    const { status, data } = await httpRequestJson(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload)
+        },
+        body: payload
+    });
+    if (status < 200 || status >= 300) {
+        throw new Error('PayPal refund failed: ' + status + ' ' + JSON.stringify(data));
+    }
+    return data;
+}
+
+// ---------------- Stripe Refund Function ----------------
+async function stripeRefundPaymentIntent(paymentIntentId, amount) {
+    if (!stripe) {
+        throw new Error('Stripe not initialized');
+    }
+    
+    try {
+        const refundParams = amount 
+            ? { payment_intent: paymentIntentId, amount: Math.round(Number(amount) * 100) } // Convert to cents
+            : { payment_intent: paymentIntentId }; // Full refund
+        
+        const refund = await stripe.refunds.create(refundParams);
+        return refund;
+    } catch (error) {
+        throw new Error('Stripe refund failed: ' + error.message);
+    }
+}
+
 // Create PayPal order using current cart + delivery selection
 app.post('/api/paypal/create-order', checkAuthenticated, checkNotAdmin, async (req, res) => {
     try {
@@ -2650,6 +2862,351 @@ app.post('/api/paypal/capture-order', checkAuthenticated, checkNotAdmin, async (
     }
 });
 
+// API endpoint to process PayPal refund for a specific order
+app.post('/api/paypal/refund-order', checkAuthenticated, checkAdmin, async (req, res) => {
+    try {
+        const { orderId, amount, note } = req.body || {};
+        
+        if (!orderId) {
+            return res.status(400).json({ error: 'Missing orderId' });
+        }
+
+        // Find the order
+        const order = (inMemory.orders || []).find(o => String(o.id) === String(orderId));
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        // Check if payment was made via PayPal
+        const paymentMethod = order.paymentMethod || (order.paymentDetails && order.paymentDetails.method);
+        const paypalOrderId = order.paymentDetails && order.paymentDetails.paypalOrderId;
+
+        if (paymentMethod !== 'paypal' || !paypalOrderId) {
+            return res.status(400).json({ 
+                error: 'Order was not paid via PayPal',
+                paymentMethod: paymentMethod 
+            });
+        }
+
+        // Get the capture ID from PayPal
+        const accessToken = await paypalGetAccessToken();
+        const orderDetailsUrl = PAYPAL_API_BASE + '/v2/checkout/orders/' + encodeURIComponent(paypalOrderId);
+        const { status: orderStatus, data: orderData } = await httpRequestJson(orderDetailsUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': 'Bearer ' + accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (orderStatus < 200 || orderStatus >= 300 || !orderData) {
+            return res.status(500).json({ 
+                error: 'Failed to retrieve PayPal order details',
+                status: orderStatus 
+            });
+        }
+
+        // Extract capture ID
+        const captureId = orderData.purchase_units && 
+                        orderData.purchase_units[0] && 
+                        orderData.purchase_units[0].payments && 
+                        orderData.purchase_units[0].payments.captures && 
+                        orderData.purchase_units[0].payments.captures[0] && 
+                        orderData.purchase_units[0].payments.captures[0].id;
+
+        if (!captureId) {
+            return res.status(400).json({ 
+                error: 'No capture found for this PayPal order',
+                paypalOrderId: paypalOrderId 
+            });
+        }
+
+        // Process the refund (full or partial)
+        const refundAmount = amount ? String(Number(amount).toFixed(2)) : String(Number(order.total).toFixed(2));
+        const refundData = await paypalRefundCaptureRemote(captureId, refundAmount, PAYPAL_CURRENCY);
+
+        console.log('PayPal refund processed via API:', refundData);
+
+        // Update order status
+        order.status = 'refunded';
+        order.refundDetails = {
+            paypalRefundId: refundData.id,
+            paypalRefundStatus: refundData.status,
+            refundedAmount: refundAmount,
+            refundedAt: new Date().toISOString(),
+            note: note || 'Admin-initiated refund via API'
+        };
+        if (!order.history) order.history = [];
+        order.history.push({
+            status: 'refunded via PayPal',
+            at: new Date().toISOString(),
+            refundId: refundData.id
+        });
+
+        persistStore(() => {});
+
+        return res.json({
+            success: true,
+            message: 'Refund processed successfully',
+            refund: {
+                id: refundData.id,
+                status: refundData.status,
+                amount: refundAmount,
+                currency: PAYPAL_CURRENCY
+            }
+        });
+    } catch (e) {
+        console.error('PayPal refund API error:', e);
+        return res.status(500).json({ 
+            error: 'Failed to process PayPal refund',
+            details: e.message 
+        });
+    }
+});
+
+// ---------------- Stripe Checkout Endpoints ----------------
+
+// Create Stripe checkout session
+app.post('/api/stripe/create-checkout-session', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    if (!STRIPE_SECRET_KEY) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+    }
+
+    try {
+        const { deliveryOption, usePointsFreeDelivery } = req.body || {};
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        
+        if (!cart || cart.length === 0) {
+            return res.status(400).json({ error: 'Cart is empty' });
+        }
+        if (!req.session.delivery) {
+            return res.status(400).json({ error: 'Missing delivery details' });
+        }
+
+        const subtotal = cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+
+        const now = new Date();
+        const cutoffHour = 13;
+        let deliveryCost = 10;
+        let pointsRedeemed = 0;
+        let finalDeliveryOption = (deliveryOption || 'normal');
+
+        if (finalDeliveryOption === 'one-day') {
+            if (now.getHours() >= cutoffHour) {
+                return res.status(400).json({ error: 'One-day delivery must be ordered before 1pm.' });
+            }
+            deliveryCost = 25;
+        }
+
+        const membership = buildMembershipSummary(req.session.user || {});
+        const wantsFreeDelivery = usePointsFreeDelivery === true || usePointsFreeDelivery === 'on' || usePointsFreeDelivery === '1';
+        if (wantsFreeDelivery && finalDeliveryOption === 'normal' && membership.points >= REDEEM_POINTS_FREE_DELIVERY) {
+            deliveryCost = 0;
+            pointsRedeemed = REDEEM_POINTS_FREE_DELIVERY;
+        }
+
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        // Save pending checkout data in session
+        req.session.pendingCheckout = {
+            deliveryOption: finalDeliveryOption,
+            deliveryCost,
+            subtotal,
+            pointsRedeemed
+        };
+
+        // Create line items for Stripe
+        const lineItems = cart.map(item => ({
+            price_data: {
+                currency: STRIPE_CURRENCY,
+                product_data: {
+                    name: item.productName || item.name || 'Product',
+                    images: item.image ? [`${req.protocol}://${req.get('host')}/images/${item.image}`] : []
+                },
+                unit_amount: Math.round(Number(item.price) * 100) // Convert to cents
+            },
+            quantity: Number(item.quantity) || 1
+        }));
+
+        // Add delivery as a line item
+        if (deliveryCost > 0) {
+            lineItems.push({
+                price_data: {
+                    currency: STRIPE_CURRENCY,
+                    product_data: {
+                        name: finalDeliveryOption === 'one-day' ? 'One-Day Delivery' : 'Standard Delivery'
+                    },
+                    unit_amount: Math.round(deliveryCost * 100)
+                },
+                quantity: 1
+            });
+        }
+
+        // Create Stripe checkout session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: lineItems,
+            mode: 'payment',
+            success_url: `${req.protocol}://${req.get('host')}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${req.protocol}://${req.get('host')}/checkout`,
+            client_reference_id: String(getUserIdFromSessionUser(req.session.user)),
+            metadata: {
+                userId: String(getUserIdFromSessionUser(req.session.user)),
+                deliveryOption: finalDeliveryOption,
+                pointsRedeemed: String(pointsRedeemed)
+            }
+        });
+
+        return res.json({ id: session.id, url: session.url });
+    } catch (e) {
+        console.error('Stripe checkout session error:', e);
+        return res.status(500).json({ error: 'Failed to create checkout session', details: e.message });
+    }
+});
+
+// Stripe success callback
+app.get('/stripe/success', checkAuthenticated, checkNotAdmin, async (req, res) => {
+    const sessionId = req.query.session_id;
+    
+    if (!sessionId || !stripe) {
+        req.flash('error', 'Invalid payment session');
+        return res.redirect('/checkout');
+    }
+
+    try {
+        // Retrieve the session from Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        
+        if (session.payment_status !== 'paid') {
+            req.flash('error', 'Payment not completed');
+            return res.redirect('/checkout');
+        }
+
+        // Build internal order from session data
+        const baseCart = req.session.cart || [];
+        const cart = Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length
+            ? req.session.selectedCartItems
+            : baseCart;
+        
+        const pending = req.session.pendingCheckout || {};
+        const subtotal = pending.subtotal != null ? Number(pending.subtotal) : cart.reduce((s, it) => s + (Number(it.price || 0) * Number(it.quantity || 0)), 0);
+        const deliveryCost = Number(pending.deliveryCost || 0);
+        const pointsRedeemed = Number(pending.pointsRedeemed || 0);
+        const deliveryOption = pending.deliveryOption || 'normal';
+        const total = Number(subtotal) + Number(deliveryCost);
+
+        const orderBase = {
+            userId: getUserIdFromSessionUser(req.session.user),
+            items: cart.slice(),
+            subtotal,
+            deliveryOption,
+            deliveryCost,
+            total,
+            paymentMethod: 'stripe',
+            delivery: req.session.delivery || null
+        };
+
+        const toCreate = Object.assign({}, orderBase, {
+            status: 'paid',
+            paymentDetails: {
+                method: 'stripe',
+                stripeSessionId: sessionId,
+                stripePaymentIntentId: session.payment_intent
+            },
+            deliveryStatus: 'processing',
+            membership: {
+                pointsEarned: Math.floor(subtotal * POINTS_PER_DOLLAR),
+                pointsRedeemed: pointsRedeemed
+            }
+        });
+
+        // Create order in our store
+        addOrder(toCreate, (err, created) => {
+            if (err || !created || !created.id) {
+                console.error('Order create warning (stripe):', err);
+                req.flash('error', 'Payment successful but order creation failed. Please contact support.');
+                return res.redirect('/orders');
+            }
+
+            // Deduct stock
+            try {
+                (created.items || []).forEach(item => {
+                    const pid = item.productId || item.id;
+                    const qty = Number(item.quantity) || 0;
+                    if (!pid || qty <= 0) return;
+                    const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+                    connection.query(sql, [qty, pid], (e) => {
+                        if (e) console.error('Failed to deduct stock for product', pid, e);
+                    });
+                });
+            } catch (e) {
+                console.error('Error during stock deduction:', e);
+            }
+
+            // Clear selected items/cart
+            if (Array.isArray(req.session.selectedCartItems) && req.session.selectedCartItems.length) {
+                const selectedIds = new Set(req.session.selectedCartItems.map(it => String(it.productId)));
+                req.session.cart = (req.session.cart || []).filter(it => !selectedIds.has(String(it.productId)));
+                req.session.selectedCartItems = [];
+            } else {
+                req.session.cart = [];
+            }
+            const uid = getUserIdFromSessionUser(req.session.user);
+            if (uid) saveCartToDB(uid, req.session.cart, () => {});
+
+            // Update points
+            try {
+                if (req.session.user && uid) {
+                    const earned = Math.floor(subtotal * POINTS_PER_DOLLAR);
+                    let currentPoints = Number(req.session.user.points || 0) || 0;
+                    currentPoints += earned;
+                    if (pointsRedeemed > 0) currentPoints = Math.max(0, currentPoints - pointsRedeemed);
+                    req.session.user.points = currentPoints;
+                    const sql = 'UPDATE users SET points = ? WHERE id = ?';
+                    connection.query(sql, [currentPoints, uid], (e) => {
+                        if (e) console.error('Failed to update user points:', e);
+                    });
+                }
+            } catch (e) {
+                console.error('Error updating membership points:', e);
+            }
+
+            // Notifications
+            try {
+                addNotification({
+                    role: 'admin',
+                    type: 'order',
+                    message: `New paid order #${created.id} from ${req.session.user.username} (Stripe).`,
+                    link: '/admin/orders'
+                });
+                addNotification({
+                    role: 'user',
+                    userId: uid,
+                    type: 'order',
+                    message: `Your order #${created.id} has been placed successfully.`,
+                    link: '/orders/' + encodeURIComponent(created.id)
+                });
+            } catch (e) {
+                console.error('Failed to create notifications for new order:', e);
+            }
+
+            // Cleanup pending selection
+            req.session.pendingCheckout = null;
+            req.session.lastOrderId = created.id;
+            
+            req.flash('success', 'Payment successful! Your order has been placed.');
+            return res.redirect('/orders/' + encodeURIComponent(created.id));
+        });
+    } catch (e) {
+        console.error('Stripe success handler error:', e);
+        req.flash('error', 'An error occurred processing your payment');
+        return res.redirect('/checkout');
+    }
+});
+
 // QR payment page (shows QR and allows simulating confirmation)
 app.get('/pay/qr/:id', checkAuthenticated, checkNotAdmin, (req, res) => {
     const id = req.params.id;
@@ -2789,7 +3346,8 @@ app.post('/help-center/refund', checkAuthenticated, checkNotAdmin, (req, res) =>
             userId,
             username: req.session.user.username,
             orderId: order.id,
-            reason
+            reason,
+            items: order.items || []  // Include items for later stock restoration
         }, (e) => {
             if (e) {
                 console.error('Failed to save refund request:', e);

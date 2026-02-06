@@ -82,11 +82,15 @@
       <!-- Decouple select name; use hidden input for actual submission value -->
       <select id="paymentMethod" name="pmSelect" class="form-select">
         <option value="paypal" selected>PayPal</option>
+        <option value="stripe">Stripe (Credit/Debit Card)</option>
         <option value="nets">NETS QR Code</option>
       </select>
     </div>
 
     <div id="paypal-button-container"></div>
+    <div id="stripe-button-container" class="mt-2" style="display:none;">
+      <button type="button" id="stripe-checkout-button" class="btn btn-primary w-100">Pay with Stripe</button>
+    </div>
     <div id="nets-button-container" class="mt-2" style="display:none;">
       <button type="submit" class="btn btn-dark">Pay with NETS QR</button>
     </div>
@@ -120,6 +124,7 @@
   (function(){
     const methodSelect = document.getElementById('paymentMethod');
     const paypalContainer = document.getElementById('paypal-button-container');
+    const stripeContainer = document.getElementById('stripe-button-container');
     const netsContainer = document.getElementById('nets-button-container');
     const usePointsEl = document.getElementById('usePointsFreeDelivery');
     const hiddenUsePoints = document.getElementById('usePointsFreeDeliveryHidden');
@@ -135,12 +140,18 @@
     function toggleUI(){
       const v = methodSelect ? methodSelect.value : 'paypal';
       if (hiddenPayment) hiddenPayment.value = v;
-      if (v === 'nets') {
+      if (v === 'stripe') {
+        netsContainer && (netsContainer.style.display = 'none');
+        paypalContainer && (paypalContainer.style.display = 'none');
+        stripeContainer && (stripeContainer.style.display = 'block');
+      } else if (v === 'nets') {
         netsContainer && (netsContainer.style.display = 'block');
         paypalContainer && (paypalContainer.style.display = 'none');
+        stripeContainer && (stripeContainer.style.display = 'none');
       } else {
         netsContainer && (netsContainer.style.display = 'none');
         paypalContainer && (paypalContainer.style.display = 'block');
+        stripeContainer && (stripeContainer.style.display = 'none');
       }
     }
     if (methodSelect) methodSelect.addEventListener('change', toggleUI);
@@ -201,6 +212,47 @@
   </script>
 <% } else { %>
   <div class="alert alert-warning mt-3">PayPal is not configured. Please set PAYPAL_CLIENT_ID.</div>
+<% } %>
+
+<% if (typeof stripePublishableKey === 'string' && stripePublishableKey) { %>
+  <script>
+    // Stripe checkout handler
+    (function(){
+      const stripeButton = document.getElementById('stripe-checkout-button');
+      const deliverySelect = document.querySelector('select[name="deliveryOption"]');
+      const usePointsEl = document.getElementById('usePointsFreeDelivery');
+
+      if (stripeButton) {
+        stripeButton.addEventListener('click', function(){
+          const deliveryOption = deliverySelect ? deliverySelect.value : 'normal';
+          const usePointsFreeDelivery = !!(usePointsEl && usePointsEl.checked);
+
+          stripeButton.disabled = true;
+          stripeButton.textContent = 'Processing...';
+
+          fetch('/api/stripe/create-checkout-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deliveryOption, usePointsFreeDelivery })
+          })
+          .then(function(res){ return res.json(); })
+          .then(function(json){
+            if (!json || !json.url) {
+              throw new Error(json.error || 'Failed to create checkout session');
+            }
+            // Redirect to Stripe Checkout
+            window.location.href = json.url;
+          })
+          .catch(function(e){
+            console.error('Stripe checkout error:', e);
+            alert('Failed to initiate Stripe checkout: ' + e.message);
+            stripeButton.disabled = false;
+            stripeButton.textContent = 'Pay with Stripe';
+          });
+        });
+      }
+    })();
+  </script>
 <% } %>
 
 <%- include('partials/footer') %>
