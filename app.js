@@ -1813,15 +1813,12 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                     req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
-<<<<<<< HEAD
                 if (refundSucceeded) {
                     restoreStockForOrder(order);
                 } else {
                     console.warn('Refund not completed for order', r.orderId, '- skipping stock restore');
                 }
 
-=======
->>>>>>> 8b703a9aeb80421bc30604c9e24f637b98065b85
                 // Remove order from active orders list
                 const idx = (inMemory.orders || []).findIndex(o => String(o.id) === String(r.orderId));
                 if (idx !== -1) {
