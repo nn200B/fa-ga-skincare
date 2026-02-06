@@ -307,6 +307,101 @@ function addOrder(order, cb) {
 
     inMemory.orders.push(o);
 
+    if (!SKIP_DB) {
+        const paymentDetails = o.paymentDetails || {};
+        const delivery = o.delivery || {};
+
+        const sql = `
+            INSERT INTO orders (
+                id, userId, subtotal, deliveryOption, deliveryCost, total,
+                paymentMethod, status, deliveryStatus, createdAt,
+                stripeSessionId, stripePaymentIntentId, paypalOrderId,
+                cardHolder, cardLast4, paymentReference,
+                netsTxnRetrievalRef, netsCourseInitId, netsNetworkCode, netsResponseCode,
+                qrReference,
+                deliveryFullName, deliveryStreet, deliveryUnit, deliveryPostalCode, deliveryNote
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                userId = VALUES(userId),
+                subtotal = VALUES(subtotal),
+                deliveryOption = VALUES(deliveryOption),
+                deliveryCost = VALUES(deliveryCost),
+                total = VALUES(total),
+                paymentMethod = VALUES(paymentMethod),
+                status = VALUES(status),
+                deliveryStatus = VALUES(deliveryStatus),
+                createdAt = VALUES(createdAt),
+                stripeSessionId = VALUES(stripeSessionId),
+                stripePaymentIntentId = VALUES(stripePaymentIntentId),
+                paypalOrderId = VALUES(paypalOrderId),
+                cardHolder = VALUES(cardHolder),
+                cardLast4 = VALUES(cardLast4),
+                paymentReference = VALUES(paymentReference),
+                netsTxnRetrievalRef = VALUES(netsTxnRetrievalRef),
+                netsCourseInitId = VALUES(netsCourseInitId),
+                netsNetworkCode = VALUES(netsNetworkCode),
+                netsResponseCode = VALUES(netsResponseCode),
+                qrReference = VALUES(qrReference),
+                deliveryFullName = VALUES(deliveryFullName),
+                deliveryStreet = VALUES(deliveryStreet),
+                deliveryUnit = VALUES(deliveryUnit),
+                deliveryPostalCode = VALUES(deliveryPostalCode),
+                deliveryNote = VALUES(deliveryNote)
+        `;
+
+        const params = [
+            o.id,
+            o.userId,
+            o.subtotal,
+            o.deliveryOption,
+            o.deliveryCost,
+            o.total,
+            o.paymentMethod || paymentDetails.method || null,
+            o.status || null,
+            o.deliveryStatus || null,
+            o.createdAt ? new Date(o.createdAt) : new Date(),
+            paymentDetails.stripeSessionId || null,
+            paymentDetails.stripePaymentIntentId || null,
+            paymentDetails.paypalOrderId || null,
+            paymentDetails.holder || null,
+            paymentDetails.last4 || null,
+            paymentDetails.paymentReference || null,
+            paymentDetails.netsTxnRetrievalRef || null,
+            paymentDetails.netsCourseInitId || null,
+            paymentDetails.netsNetworkCode || null,
+            paymentDetails.netsResponseCode || null,
+            paymentDetails.qrReference || null,
+            delivery.fullName || null,
+            delivery.street || null,
+            delivery.unit || null,
+            delivery.postalCode || null,
+            delivery.note || null
+        ];
+
+        connection.query(sql, params, (err) => {
+            if (err) console.error('Failed to persist order to SQL:', err);
+        });
+
+        const items = (o.items || []).map(item => [
+            o.id,
+            item.productId || item.id || null,
+            item.productName || null,
+            item.price || 0,
+            Number(item.quantity) || 0
+        ]).filter(row => row[1] && row[4] > 0);
+
+        if (items.length) {
+            const deleteSql = 'DELETE FROM order_items WHERE orderId = ?';
+            connection.query(deleteSql, [o.id], (dErr) => {
+                if (dErr) console.error('Failed to refresh order items (delete):', dErr);
+                const itemSql = 'INSERT INTO order_items (orderId, productId, productName, price, quantity) VALUES ?';
+                connection.query(itemSql, [items], (iErr) => {
+                    if (iErr) console.error('Failed to persist order items to SQL:', iErr);
+                });
+            });
+        }
+    }
+
     persistStore(() => {
         if (cb) cb(null, o);
     });
@@ -491,9 +586,36 @@ function updateOrderStatus(orderId, newStatus, cb) {
     o.deliveryStatus = newStatus;
     if (!o.history) o.history = [];
     o.history.push({ status: newStatus, at: new Date().toISOString() });
+    if (!SKIP_DB) {
+        connection.query('UPDATE orders SET deliveryStatus = ? WHERE id = ?', [newStatus, o.id], (e) => {
+            if (e) console.error('Failed to update order status in SQL:', e);
+        });
+    }
     persistStore(() => {
         if (cb) cb(null, o);
     });
+}
+
+function restoreStockForOrder(order) {
+    if (!order || !Array.isArray(order.items)) return;
+
+    order.items.forEach(item => {
+        const pid = item.productId || item.id;
+        const qty = Number(item.quantity) || 0;
+        if (!pid || qty <= 0) return;
+
+        if (SKIP_DB) {
+            const prod = (inMemory.products || []).find(p => String(p.id) === String(pid));
+            if (prod) prod.quantity = Number(prod.quantity || 0) + qty;
+        }
+
+        const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
+        connection.query(sql, [qty, pid], (e) => {
+            if (e) console.error('Failed to restore stock for product', pid, 'quantity', qty, e);
+        });
+    });
+
+    if (SKIP_DB) persistStore(() => {});
 }
 
 // Helper to get the current logged-in user id from session user
@@ -1153,67 +1275,70 @@ app.post('/add-to-cart/:id', checkNotAdmin, (req, res) => {
             return res.status(500).send('Database error');
         }
 
-        if (results.length > 0) {
-            const product = results[0];
+        if (!results || results.length === 0) {
+            const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+            if (acceptsJson) return res.status(404).json({ success: false, error: 'Product not found.' });
+            req.flash('error', 'Product not found.');
+            return res.redirect('/shopping');
+        }
 
-            // Ensure session cart exists
-            if (!req.session.cart) {
-                req.session.cart = [];
+        const product = results[0];
+
+        // Ensure session cart exists
+        if (!req.session.cart) {
+            req.session.cart = [];
+        }
+
+        // Current quantity in cart for this product
+        const existingItem = req.session.cart.find(item => item.productId === productId);
+        const currentQty = existingItem ? (parseInt(existingItem.quantity) || 0) : 0;
+        const requestedTotal = currentQty + quantity;
+
+        // If requested quantity exceeds available stock, block and inform user
+        if (requestedTotal > product.quantity) {
+            const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+            const message = `Not enough stock available. Only ${product.quantity} left.`;
+            if (acceptsJson) {
+                return res.status(400).json({ success: false, error: message, available: product.quantity, inCart: currentQty });
             }
+            req.flash('error', message);
+            return res.redirect('/shopping');
+        }
 
-            // Current quantity in cart for this product
-            const existingItem = req.session.cart.find(item => item.productId === productId);
-            const currentQty = existingItem ? (parseInt(existingItem.quantity) || 0) : 0;
-            const requestedTotal = currentQty + quantity;
-
-            // If requested quantity exceeds available stock, block and inform user
-            if (requestedTotal > product.quantity) {
-                const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
-                const message = `Not enough stock available. Only ${product.quantity} left.`;
-                if (acceptsJson) {
-                    return res.status(400).json({ success: false, error: message, available: product.quantity, inCart: currentQty });
-                }
-                req.flash('error', message);
-                return res.redirect('/shopping');
-            }
-
-            // Otherwise, add/update item in cart
-            if (existingItem) {
-                existingItem.quantity = requestedTotal;
-            } else {
-                req.session.cart.push({
-                    productId: productId,
-                    productName: product.productName,
-                    price: product.price,
-                    quantity: quantity,
-                    image: product.image
-                });
-            }
-
-                        // save session cart to DB for logged-in user
-                        const uid = getUserIdFromSessionUser(req.session.user);
-                        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
-                        const afterSave = () => {
-                            const cartQuantity = (req.session.cart || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-                            if (acceptsJson) {
-                                return res.json({ success: true, cartLength: req.session.cart.length, cartQuantity });
-                            }
-                            // For normal form posts, stay on the current page instead of redirecting to /cart.
-                            // Redirect back to the referrer (usually /shopping or product page); fallback to /shopping.
-                            const referer = req.get('referer') || '/shopping';
-                            return res.redirect(referer);
-                        };
-
-                        if (uid) {
-                            saveCartToDB(uid, req.session.cart, (err) => {
-                                if (err) console.error('Failed to save cart after add:', err);
-                                return afterSave();
-                            });
-                        } else {
-                            return afterSave();
-                        }
+        // Otherwise, add/update item in cart
+        if (existingItem) {
+            existingItem.quantity = requestedTotal;
         } else {
-            res.status(404).send("Product not found");
+            req.session.cart.push({
+                productId: productId,
+                productName: product.productName,
+                price: product.price,
+                quantity: quantity,
+                image: product.image
+            });
+        }
+
+        // save session cart to DB for logged-in user
+        const uid = getUserIdFromSessionUser(req.session.user);
+        const acceptsJson = req.xhr || (req.get('Accept') || '').includes('application/json') || req.get('content-type') === 'application/json';
+        const afterSave = () => {
+            const cartQuantity = (req.session.cart || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+            if (acceptsJson) {
+                return res.json({ success: true, cartLength: req.session.cart.length, cartQuantity });
+            }
+            // For normal form posts, stay on the current page instead of redirecting to /cart.
+            // Redirect back to the referrer (usually /shopping or product page); fallback to /shopping.
+            const referer = req.get('referer') || '/shopping';
+            return res.redirect(referer);
+        };
+
+        if (uid) {
+            saveCartToDB(uid, req.session.cart, (err) => {
+                if (err) console.error('Failed to save cart after add:', err);
+                return afterSave();
+            });
+        } else {
+            return afterSave();
         }
     });
 });
@@ -1599,6 +1724,7 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
         // When approved, process PayPal refund if payment was via PayPal
         if (newStatus === 'approved') {
             const order = (inMemory.orders || []).find(o => String(o.id) === String(r.orderId));
+            let refundSucceeded = false;
             
             if (order) {
                 // Check if payment was made via PayPal or Stripe
@@ -1645,6 +1771,7 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                                 r.paypalRefundId = refundData.id;
                                 r.paypalRefundStatus = refundData.status;
                                 r.refundedAmount = refundAmount;
+                                refundSucceeded = true;
                                 
                                 req.flash('success', `Refund approved and processed via PayPal. Refund ID: ${refundData.id}`);
                             } else {
@@ -1674,6 +1801,7 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                         r.stripeRefundId = refundData.id;
                         r.stripeRefundStatus = refundData.status;
                         r.refundedAmount = refundAmount ? refundAmount.toFixed(2) : order.total;
+                        refundSucceeded = refundData && refundData.status && refundData.status !== 'failed';
                         
                         req.flash('success', `Refund approved and processed via Stripe. Refund ID: ${refundData.id}`);
                     } catch (stripeError) {
@@ -1683,45 +1811,14 @@ app.post('/admin/help-center/refund/:id/decision', checkAuthenticated, checkAdmi
                     }
                 } else {
                     // Non-PayPal/Stripe order (QR/NETS) - just mark as refunded locally
+                    refundSucceeded = true;
                     req.flash('success', `Refund accepted for order #${r.orderId}. (Non-PayPal/Stripe payment - process refund manually if needed)`);
                 }
 
-                // Restore stock for all items in the refunded order
-                console.log('🔍 Attempting to restore stock for order:', r.orderId);
-                console.log('🔍 Order object:', JSON.stringify(order, null, 2));
-                
-                if (order && order.items && Array.isArray(order.items)) {
-                    console.log('🔍 Found', order.items.length, 'items to restore');
-                    try {
-                        order.items.forEach(item => {
-                            console.log('🔍 Processing item:', JSON.stringify(item, null, 2));
-                            const pid = item.productId || item.id;
-                            const qty = Number(item.quantity) || 0;
-                            console.log('🔍 Product ID:', pid, 'Quantity to restore:', qty);
-                            
-                            if (!pid || qty <= 0) {
-                                console.warn('⚠️ Skipping item - invalid pid or quantity');
-                                return;
-                            }
-                            
-                            const sql = 'UPDATE products SET quantity = quantity + ? WHERE id = ?';
-                            console.log('🔍 Executing SQL:', sql, 'with params:', [qty, pid]);
-                            
-                            connection.query(sql, [qty, pid], (e, results) => {
-                                if (e) {
-                                    console.error('❌ Failed to restore stock for product', pid, 'quantity', qty, e);
-                                } else {
-                                    console.log('✅ Stock restored for product', pid, '- added back', qty, 'units');
-                                    console.log('✅ Query results:', results);
-                                }
-                            });
-                        });
-                    } catch (e) {
-                        console.error('❌ Error during stock restoration:', e);
-                    }
+                if (refundSucceeded) {
+                    restoreStockForOrder(order);
                 } else {
-                    console.warn('⚠️ No order items found to restore stock for order', r.orderId);
-                    console.log('⚠️ Order structure:', order);
+                    console.warn('Refund not completed for order', r.orderId, '- skipping stock restore');
                 }
 
                 // Remove order from active orders list
@@ -2252,7 +2349,8 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
                 deliveryCost,
                 total,
             paymentMethod: paymentMethod || 'card',
-            delivery: req.session.delivery || null
+            delivery: req.session.delivery || null,
+            pointsRedeemed
         };
 
         // QR branch (legacy in-app QR)
@@ -2303,8 +2401,7 @@ app.post('/checkout', checkAuthenticated, checkNotAdmin, (req, res) => {
             paymentDetails: {
                 method: 'card',
                 holder,
-                last4: cardNumber.slice(-4),
-                cvv
+                last4: cardNumber.slice(-4)
             },
             deliveryStatus: 'processing',
             membership: {
@@ -2434,10 +2531,86 @@ app.post('/order/confirm', checkAuthenticated, checkNotAdmin, (req, res) => {
     if (!o) return res.redirect('/orders');
     // mark as paid and update delivery estimate
     o.status = 'paid';
+    if (!o.paymentDetails) o.paymentDetails = {};
+    o.paymentDetails.method = 'nets';
+    if (req.session.netsPaymentDetails) {
+        o.paymentDetails.netsTxnRetrievalRef = req.session.netsPaymentDetails.netsTxnRetrievalRef || null;
+        o.paymentDetails.netsCourseInitId = req.session.netsPaymentDetails.netsCourseInitId || null;
+        o.paymentDetails.netsNetworkCode = req.session.netsPaymentDetails.netsNetworkCode || null;
+        o.paymentDetails.netsResponseCode = req.session.netsPaymentDetails.netsResponseCode || null;
+    }
     if (!o.history) o.history = [];
     o.history.push({ status: 'paid', at: new Date().toISOString() });
     o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
     o.new = true;
+
+    try {
+        (o.items || []).forEach(item => {
+            const pid = item.productId || item.id;
+            const qty = Number(item.quantity) || 0;
+            if (!pid || qty <= 0) return;
+            const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+            connection.query(sql, [qty, pid], (e) => {
+                if (e) console.error('Failed to deduct stock for product', pid, e);
+            });
+        });
+    } catch (e) {
+        console.error('Error during stock deduction:', e);
+    }
+
+    try {
+        const uid = getUserIdFromSessionUser(req.session.user);
+        if (req.session.user && uid) {
+            const earned = Math.floor(Number(o.subtotal || 0) * POINTS_PER_DOLLAR);
+            let currentPoints = Number(req.session.user.points || 0) || 0;
+            currentPoints += earned;
+            if (o.pointsRedeemed > 0) currentPoints = Math.max(0, currentPoints - o.pointsRedeemed);
+            req.session.user.points = currentPoints;
+            const sql = 'UPDATE users SET points = ? WHERE id = ?';
+            connection.query(sql, [currentPoints, uid], (e) => {
+                if (e) console.error('Failed to update user points:', e);
+            });
+        }
+    } catch (e) {
+        console.error('Error updating membership points:', e);
+    }
+
+    try {
+        const uid = getUserIdFromSessionUser(req.session.user);
+        addNotification({
+            role: 'admin',
+            type: 'order',
+            message: `New paid order #${o.id} from ${req.session.user.username} (NETS).`,
+            link: '/admin/orders'
+        });
+        addNotification({
+            role: 'user',
+            userId: uid,
+            type: 'order',
+            message: `Your order #${o.id} has been placed successfully.`,
+            link: '/orders/' + encodeURIComponent(o.id)
+        });
+    } catch (e) {
+        console.error('Failed to create notifications for new order:', e);
+    }
+    connection.query(
+        `UPDATE orders
+         SET status = ?, paymentMethod = ?,
+             netsTxnRetrievalRef = ?, netsCourseInitId = ?, netsNetworkCode = ?, netsResponseCode = ?
+         WHERE id = ?`,
+        [
+            o.status,
+            'nets',
+            o.paymentDetails.netsTxnRetrievalRef || null,
+            o.paymentDetails.netsCourseInitId || null,
+            o.paymentDetails.netsNetworkCode || null,
+            o.paymentDetails.netsResponseCode || null,
+            o.id
+        ],
+        (e) => {
+            if (e) console.error('Failed to update NETS payment details in SQL:', e);
+        }
+    );
     // clear cart
     req.session.cart = [];
     const uid = getUserIdFromSessionUser(req.session.user);
@@ -3222,11 +3395,70 @@ app.post('/pay/qr/:id/confirm', checkAuthenticated, checkNotAdmin, (req, res) =>
     const o = (inMemory.orders || []).find(x => String(x.id) === String(id));
     if (!o) return res.status(404).send('Order not found');
     o.status = 'paid';
+    if (!o.paymentDetails) o.paymentDetails = {};
+    o.paymentDetails.method = 'qr';
+    o.paymentDetails.qrReference = o.paymentDetails.qrReference || `qr-${o.id}`;
     if (!o.history) o.history = [];
     o.history.push({ status: 'paid', at: new Date().toISOString() });
     // update delivery estimate
     o.estimatedDelivery = estimateDeliveryDate(o.createdAt, o.deliveryOption);
     o.new = true;
+    try {
+        (o.items || []).forEach(item => {
+            const pid = item.productId || item.id;
+            const qty = Number(item.quantity) || 0;
+            if (!pid || qty <= 0) return;
+            const sql = 'UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?';
+            connection.query(sql, [qty, pid], (e) => {
+                if (e) console.error('Failed to deduct stock for product', pid, e);
+            });
+        });
+    } catch (e) {
+        console.error('Error during stock deduction:', e);
+    }
+
+    try {
+        const uid = getUserIdFromSessionUser(req.session.user);
+        if (req.session.user && uid) {
+            const earned = Math.floor(Number(o.subtotal || 0) * POINTS_PER_DOLLAR);
+            let currentPoints = Number(req.session.user.points || 0) || 0;
+            currentPoints += earned;
+            if (o.pointsRedeemed > 0) currentPoints = Math.max(0, currentPoints - o.pointsRedeemed);
+            req.session.user.points = currentPoints;
+            const sql = 'UPDATE users SET points = ? WHERE id = ?';
+            connection.query(sql, [currentPoints, uid], (e) => {
+                if (e) console.error('Failed to update user points:', e);
+            });
+        }
+    } catch (e) {
+        console.error('Error updating membership points:', e);
+    }
+
+    try {
+        const uid = getUserIdFromSessionUser(req.session.user);
+        addNotification({
+            role: 'admin',
+            type: 'order',
+            message: `New paid order #${o.id} from ${req.session.user.username} (QR).`,
+            link: '/admin/orders'
+        });
+        addNotification({
+            role: 'user',
+            userId: uid,
+            type: 'order',
+            message: `Your order #${o.id} has been placed successfully.`,
+            link: '/orders/' + encodeURIComponent(o.id)
+        });
+    } catch (e) {
+        console.error('Failed to create notifications for new order:', e);
+    }
+    connection.query(
+        'UPDATE orders SET status = ?, paymentMethod = ?, qrReference = ? WHERE id = ?',
+        [o.status, 'qr', o.paymentDetails.qrReference || null, o.id],
+        (e) => {
+            if (e) console.error('Failed to update QR payment details in SQL:', e);
+        }
+    );
     persistStore(() => {
         // clear cart
         req.session.cart = [];

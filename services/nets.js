@@ -47,6 +47,19 @@ exports.generateQrCode = async (req, res) => {
       const txnRetrievalRef = qrData.txn_retrieval_ref;
       const courseInitId = getCourseInitIdParam();
 
+      try {
+        if (req && req.session) {
+          req.session.netsPaymentDetails = {
+            netsTxnRetrievalRef: txnRetrievalRef,
+            netsCourseInitId: courseInitId,
+            netsNetworkCode: qrData.network_status,
+            netsResponseCode: qrData.response_code
+          };
+        }
+      } catch (e) {
+        console.warn('Could not save NETS payment details to session:', e && e.message ? e.message : e);
+      }
+
       const webhookUrl = `https://sandbox.nets.openapipaas.com/api/v1/common/payments/nets/webhook?txn_retrieval_ref=${txnRetrievalRef}&course_init_id=${courseInitId}`;
 
       console.log("Transaction retrieval ref:" + txnRetrievalRef);
