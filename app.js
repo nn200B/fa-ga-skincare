@@ -74,7 +74,7 @@ let connection = mysql.createConnection({
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || 'Republic_C207',
-    database: process.env.DB_NAME || 'c372_glowaura_skincare'
+    database: process.env.DB_NAME || 'c372_supermarketdb'
 });
 // If SKIP_DB is enabled we will later overwrite connection with a safe stub to avoid accidental DB calls crashing the app.
 
